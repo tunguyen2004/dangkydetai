@@ -1,0 +1,171 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/../includes/bootstrap.php';
+require_role('admin');
+
+if (is_post()) {
+    verify_csrf();
+    $action = (string) ($_POST['action'] ?? '');
+
+    try {
+        if ($action === 'create') {
+            $name = trim((string) ($_POST['name'] ?? ''));
+            $email = trim((string) ($_POST['email'] ?? ''));
+            $role = (string) ($_POST['role'] ?? 'student');
+            $password = (string) ($_POST['password'] ?? '');
+            $studentCode = trim((string) ($_POST['student_code'] ?? '')) ?: null;
+            $teacherCode = trim((string) ($_POST['teacher_code'] ?? '')) ?: null;
+
+            if ($name === '' || $email === '' || $password === '' || !in_array($role, ['admin', 'teacher', 'student'], true)) {
+                throw new RuntimeException('Vui lòng nhập đủ thông tin tài khoản.');
+            }
+
+            $stmt = db()->prepare(
+                'INSERT INTO users (name, email, password, role, student_code, teacher_code, phone)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([
+                $name,
+                $email,
+                password_hash($password, PASSWORD_DEFAULT),
+                $role,
+                $role === 'student' ? $studentCode : null,
+                $role === 'teacher' ? $teacherCode : null,
+                trim((string) ($_POST['phone'] ?? '')) ?: null,
+            ]);
+            log_activity('create_user', 'Tạo tài khoản ' . $email);
+            flash('success', 'Đã tạo tài khoản mới.');
+        }
+
+        if ($action === 'toggle_lock') {
+            $userId = (int) ($_POST['user_id'] ?? 0);
+            if ($userId === (int) current_user()['id']) {
+                throw new RuntimeException('Không thể tự khóa tài khoản đang dùng.');
+            }
+            db()->prepare('UPDATE users SET is_locked = 1 - is_locked WHERE id = ?')->execute([$userId]);
+            log_activity('toggle_user_lock', 'Khóa/mở tài khoản #' . $userId);
+            flash('success', 'Đã cập nhật trạng thái tài khoản.');
+        }
+
+        if ($action === 'reset_password') {
+            $userId = (int) ($_POST['user_id'] ?? 0);
+            db()->prepare('UPDATE users SET password = ? WHERE id = ?')->execute([password_hash('123456', PASSWORD_DEFAULT), $userId]);
+            log_activity('reset_password', 'Reset mật khẩu tài khoản #' . $userId);
+            flash('success', 'Đã đặt lại mật khẩu thành 123456.');
+        }
+    } catch (Throwable $exception) {
+        flash('danger', $exception->getMessage());
+    }
+
+    redirect('admin/users.php');
+}
+
+$users = db()->query('SELECT * FROM users ORDER BY role, name')->fetchAll();
+$page_title = 'Quản lý tài khoản';
+require_once __DIR__ . '/../includes/header.php';
+?>
+<section class="section-heading">
+    <div>
+        <h1>Quản lý tài khoản</h1>
+        <p>Admin tạo tài khoản, khóa/mở và reset mật khẩu cho người dùng.</p>
+    </div>
+</section>
+
+<section class="card-panel mb-4">
+    <div class="panel-body">
+        <h2 class="h4 fw-bold mb-3">Thêm tài khoản</h2>
+        <form class="row g-3" method="post">
+            <?= csrf_field() ?>
+            <input type="hidden" name="action" value="create">
+            <div class="col-md-3">
+                <label class="form-label">Họ tên</label>
+                <input class="form-control" name="name" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Email</label>
+                <input class="form-control" name="email" type="email" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Vai trò</label>
+                <select class="form-select" name="role">
+                    <option value="student">Sinh viên</option>
+                    <option value="teacher">Giảng viên</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Mật khẩu</label>
+                <input class="form-control" name="password" value="123456" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">SĐT</label>
+                <input class="form-control" name="phone">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Mã sinh viên</label>
+                <input class="form-control" name="student_code" placeholder="Ví dụ: SV007">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Mã giảng viên</label>
+                <input class="form-control" name="teacher_code" placeholder="Ví dụ: GV002">
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+                <button class="btn btn-primary w-100" type="submit">Tạo tài khoản</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<section class="card-panel">
+    <div class="panel-body">
+        <div class="table-responsive">
+            <table class="table-clean">
+                <thead>
+                    <tr>
+                        <th>Người dùng</th>
+                        <th>Vai trò</th>
+                        <th>Mã</th>
+                        <th>Trạng thái</th>
+                        <th>Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($users as $row): ?>
+                        <tr>
+                            <td>
+                                <strong><?= e($row['name']) ?></strong><br>
+                                <span class="text-muted"><?= e($row['email']) ?></span>
+                            </td>
+                            <td><?= e(role_label($row['role'])) ?></td>
+                            <td><?= e($row['student_code'] ?: $row['teacher_code'] ?: '-') ?></td>
+                            <td>
+                                <span class="<?= (int) $row['is_locked'] === 1 ? 'badge-soft-danger' : 'badge-soft-success' ?>">
+                                    <?= (int) $row['is_locked'] === 1 ? 'Đang khóa' : 'Hoạt động' ?>
+                                </span>
+                            </td>
+                            <td>
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <form method="post">
+                                        <?= csrf_field() ?>
+                                        <input type="hidden" name="action" value="toggle_lock">
+                                        <input type="hidden" name="user_id" value="<?= e((string) $row['id']) ?>">
+                                        <button class="btn btn-sm btn-outline-secondary" type="submit"><?= (int) $row['is_locked'] === 1 ? 'Mở khóa' : 'Khóa' ?></button>
+                                    </form>
+                                    <form method="post" onsubmit="return confirm('Reset mật khẩu tài khoản này thành 123456?')">
+                                        <?= csrf_field() ?>
+                                        <input type="hidden" name="action" value="reset_password">
+                                        <input type="hidden" name="user_id" value="<?= e((string) $row['id']) ?>">
+                                        <button class="btn btn-sm btn-outline-warning" type="submit">Reset mật khẩu</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>
