@@ -161,10 +161,16 @@ function status_label(string $status): string
         'pending' => 'Chờ duyệt',
         'approved' => 'Đã duyệt',
         'rejected' => 'Từ chối',
-        'revision' => 'Cần chỉnh sửa',
+        'cancelled' => 'Đã hủy',
+        'revoked' => 'Hủy duyệt',
         'open' => 'Đang mở',
         'closed' => 'Đã đóng',
         'draft' => 'Nháp',
+        'forming' => 'Đang lập nhóm',
+        'registered' => 'Đã đăng ký',
+        'locked' => 'Đã khóa',
+        'accepted' => 'Đã chấp nhận',
+        'expired' => 'Hết hiệu lực',
     ][$status] ?? $status;
 }
 
@@ -174,29 +180,49 @@ function badge_class(string $status): string
         'pending' => 'badge-soft-warning',
         'approved' => 'badge-soft-success',
         'rejected' => 'badge-soft-danger',
-        'revision' => 'badge-soft-info',
+        'cancelled' => 'badge-soft-secondary',
+        'revoked' => 'badge-soft-danger',
         'open' => 'badge-soft-success',
         'closed' => 'badge-soft-secondary',
         'draft' => 'badge-soft-secondary',
+        'forming' => 'badge-soft-info',
+        'registered' => 'badge-soft-warning',
+        'locked' => 'badge-soft-success',
+        'accepted' => 'badge-soft-success',
+        'expired' => 'badge-soft-secondary',
     ][$status] ?? 'badge-soft-secondary';
 }
 
-function active_semester(): ?array
+function active_registration_period(): ?array
 {
-    $stmt = db()->query("SELECT * FROM semesters WHERE status = 'open' ORDER BY id DESC LIMIT 1");
-    $semester = $stmt->fetch();
+    $stmt = db()->query("SELECT * FROM registration_periods WHERE status = 'open' ORDER BY id DESC LIMIT 1");
+    $period = $stmt->fetch();
 
-    return $semester ?: null;
+    return $period ?: null;
 }
 
-function today_between(?string $start, ?string $end): bool
+function time_between(?string $start, ?string $end): bool
 {
     if (!$start || !$end) {
         return false;
     }
 
-    $today = date('Y-m-d');
-    return $today >= $start && $today <= $end;
+    $now = time();
+    return $now >= strtotime($start) && $now <= strtotime($end);
+}
+
+function today_between(?string $start, ?string $end): bool
+{
+    return time_between($start, $end);
+}
+
+function format_datetime(?string $value): string
+{
+    if (!$value) {
+        return '-';
+    }
+
+    return date('d/m/Y H:i', strtotime($value));
 }
 
 function log_activity(string $action, string $detail): void
@@ -206,17 +232,67 @@ function log_activity(string $action, string $detail): void
     $stmt->execute([$user['id'] ?? null, $action, $detail]);
 }
 
+function random_join_code(): string
+{
+    do {
+        $code = strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+        $stmt = db()->prepare('SELECT COUNT(*) FROM student_groups WHERE join_code = ?');
+        $stmt->execute([$code]);
+    } while ((int) $stmt->fetchColumn() > 0);
+
+    return $code;
+}
+
 function student_group(int $studentId): ?array
 {
     $stmt = db()->prepare(
-        "SELECT g.*, c.name AS class_name, c.min_members, c.max_members, c.teacher_id
+        "SELECT g.*, c.name AS class_name, c.min_members, c.max_members, c.teacher_id,
+                p.name AS period_name, p.group_start, p.group_end, p.register_start, p.register_end, p.status AS period_status,
+                co.code AS course_code, co.name AS course_name
          FROM group_members gm
          JOIN student_groups g ON g.id = gm.group_id
          JOIN classes c ON c.id = g.class_id
+         JOIN courses co ON co.id = c.course_id
+         JOIN registration_periods p ON p.id = g.registration_period_id
          WHERE gm.user_id = ?
+         ORDER BY g.created_at DESC, g.id DESC
          LIMIT 1"
     );
     $stmt->execute([$studentId]);
+    $group = $stmt->fetch();
+
+    return $group ?: null;
+}
+
+function student_groups(int $studentId): array
+{
+    $stmt = db()->prepare(
+        "SELECT g.*, c.name AS class_name, c.min_members, c.max_members, c.teacher_id,
+                p.name AS period_name, p.group_start, p.group_end, p.register_start, p.register_end, p.status AS period_status,
+                co.code AS course_code, co.name AS course_name
+         FROM group_members gm
+         JOIN student_groups g ON g.id = gm.group_id
+         JOIN classes c ON c.id = g.class_id
+         JOIN courses co ON co.id = c.course_id
+         JOIN registration_periods p ON p.id = g.registration_period_id
+         WHERE gm.user_id = ?
+         ORDER BY p.created_at DESC, c.name, g.name"
+    );
+    $stmt->execute([$studentId]);
+
+    return $stmt->fetchAll();
+}
+
+function student_group_for_context(int $studentId, int $classId, int $periodId): ?array
+{
+    $stmt = db()->prepare(
+        "SELECT g.*
+         FROM group_members gm
+         JOIN student_groups g ON g.id = gm.group_id
+         WHERE gm.user_id = ? AND g.class_id = ? AND g.registration_period_id = ?
+         LIMIT 1"
+    );
+    $stmt->execute([$studentId, $classId, $periodId]);
     $group = $stmt->fetch();
 
     return $group ?: null;
@@ -241,9 +317,12 @@ function is_group_leader(int $groupId, int $userId): bool
 function group_registration(int $groupId): ?array
 {
     $stmt = db()->prepare(
-        "SELECT r.*, t.title AS topic_title, t.code AS topic_code
+        "SELECT r.*, t.title AS topic_title, t.code AS topic_code, t.description AS topic_description,
+                t.min_members AS topic_min_members, t.max_members AS topic_max_members,
+                tc.max_groups AS topic_max_groups, tc.status AS topic_class_status
          FROM topic_registrations r
-         JOIN topics t ON t.id = r.topic_id
+         JOIN topic_classes tc ON tc.id = r.topic_class_id
+         JOIN topics t ON t.id = tc.topic_id
          WHERE r.group_id = ?
          ORDER BY r.id DESC
          LIMIT 1"
@@ -254,10 +333,27 @@ function group_registration(int $groupId): ?array
     return $registration ?: null;
 }
 
-function topic_approved_count(int $topicId): int
+function group_active_registration(int $groupId): ?array
 {
-    $stmt = db()->prepare("SELECT COUNT(*) FROM topic_registrations WHERE topic_id = ? AND status = 'approved'");
-    $stmt->execute([$topicId]);
+    $stmt = db()->prepare(
+        "SELECT r.*, t.title AS topic_title, t.code AS topic_code
+         FROM topic_registrations r
+         JOIN topic_classes tc ON tc.id = r.topic_class_id
+         JOIN topics t ON t.id = tc.topic_id
+         WHERE r.group_id = ? AND r.status IN ('pending', 'approved')
+         ORDER BY r.id DESC
+         LIMIT 1"
+    );
+    $stmt->execute([$groupId]);
+    $registration = $stmt->fetch();
+
+    return $registration ?: null;
+}
+
+function topic_class_active_count(int $topicClassId): int
+{
+    $stmt = db()->prepare("SELECT COUNT(*) FROM topic_registrations WHERE topic_class_id = ? AND status IN ('pending', 'approved')");
+    $stmt->execute([$topicClassId]);
 
     return (int) $stmt->fetchColumn();
 }
@@ -270,8 +366,8 @@ function notification_summary(array $user): array
         $stmt = db()->prepare(
             "SELECT COUNT(*)
              FROM topic_registrations r
-             JOIN student_groups g ON g.id = r.group_id
-             JOIN classes c ON c.id = g.class_id
+             JOIN topic_classes tc ON tc.id = r.topic_class_id
+             JOIN classes c ON c.id = tc.class_id
              WHERE c.teacher_id = ? AND r.status = 'pending'"
         );
         $stmt->execute([(int) $user['id']]);

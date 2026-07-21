@@ -5,6 +5,34 @@ declare(strict_types=1);
 require_once __DIR__ . '/../includes/bootstrap.php';
 require_role('admin');
 
+function next_user_code(string $role): ?string
+{
+    $prefix = [
+        'admin' => 'AD',
+        'teacher' => 'GV',
+        'student' => 'SV',
+    ][$role] ?? null;
+
+    if ($prefix === null) {
+        return null;
+    }
+
+    $stmt = db()->prepare(
+        'SELECT user_code
+         FROM users
+         WHERE user_code LIKE ?
+         ORDER BY CAST(SUBSTRING(user_code, 3) AS UNSIGNED) DESC
+         LIMIT 1'
+    );
+    $stmt->execute([$prefix . '%']);
+    $lastCode = (string) ($stmt->fetchColumn() ?: '');
+    $lastNumber = preg_match('/^' . preg_quote($prefix, '/') . '(\d+)$/', $lastCode, $matches)
+        ? (int) $matches[1]
+        : 0;
+
+    return $prefix . str_pad((string) ($lastNumber + 1), 3, '0', STR_PAD_LEFT);
+}
+
 if (is_post()) {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
@@ -15,28 +43,27 @@ if (is_post()) {
             $email = trim((string) ($_POST['email'] ?? ''));
             $role = (string) ($_POST['role'] ?? 'student');
             $password = (string) ($_POST['password'] ?? '');
-            $studentCode = trim((string) ($_POST['student_code'] ?? '')) ?: null;
-            $teacherCode = trim((string) ($_POST['teacher_code'] ?? '')) ?: null;
 
             if ($name === '' || $email === '' || $password === '' || !in_array($role, ['admin', 'teacher', 'student'], true)) {
                 throw new RuntimeException('Vui lòng nhập đủ thông tin tài khoản.');
             }
 
+            $userCode = next_user_code($role);
+
             $stmt = db()->prepare(
-                'INSERT INTO users (name, email, password, role, student_code, teacher_code, phone)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO users (name, email, password, role, user_code, phone)
+                 VALUES (?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $name,
                 $email,
                 password_hash($password, PASSWORD_DEFAULT),
                 $role,
-                $role === 'student' ? $studentCode : null,
-                $role === 'teacher' ? $teacherCode : null,
+                $userCode,
                 trim((string) ($_POST['phone'] ?? '')) ?: null,
             ]);
-            log_activity('create_user', 'Tạo tài khoản ' . $email);
-            flash('success', 'Đã tạo tài khoản mới.');
+            log_activity('create_user', 'Tạo tài khoản ' . $email . ' với mã ' . $userCode);
+            flash('success', 'Đã tạo tài khoản mới. Mã người dùng: ' . $userCode);
         }
 
         if ($action === 'toggle_lock') {
@@ -51,9 +78,9 @@ if (is_post()) {
 
         if ($action === 'reset_password') {
             $userId = (int) ($_POST['user_id'] ?? 0);
-            db()->prepare('UPDATE users SET password = ? WHERE id = ?')->execute([password_hash('123456', PASSWORD_DEFAULT), $userId]);
+            db()->prepare('UPDATE users SET password = ?, must_change_password = 1 WHERE id = ?')->execute([password_hash('123456', PASSWORD_DEFAULT), $userId]);
             log_activity('reset_password', 'Reset mật khẩu tài khoản #' . $userId);
-            flash('success', 'Đã đặt lại mật khẩu thành 123456.');
+            flash('success', 'Đã đặt lại mật khẩu thành 123456. Người dùng sẽ phải đổi mật khẩu sau khi đăng nhập.');
         }
     } catch (Throwable $exception) {
         flash('danger', $exception->getMessage());
@@ -104,12 +131,9 @@ require_once __DIR__ . '/../includes/header.php';
                 <input class="form-control" name="phone">
             </div>
             <div class="col-md-3">
-                <label class="form-label">Mã sinh viên</label>
-                <input class="form-control" name="student_code" placeholder="Ví dụ: SV007">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Mã giảng viên</label>
-                <input class="form-control" name="teacher_code" placeholder="Ví dụ: GV002">
+                <label class="form-label">Mã người dùng</label>
+                <input class="form-control" value="Tự sinh theo vai trò" disabled>
+                <div class="form-text">Sinh viên: SV001, Giảng viên: GV001, Admin: AD001.</div>
             </div>
             <div class="col-md-2 d-flex align-items-end">
                 <button class="btn btn-primary w-100" type="submit">Tạo tài khoản</button>
@@ -121,7 +145,7 @@ require_once __DIR__ . '/../includes/header.php';
 <section class="card-panel">
     <div class="panel-body">
         <div class="table-responsive">
-            <table class="table-clean">
+            <table class="table-clean admin-mobile-table users-mobile-table">
                 <thead>
                     <tr>
                         <th>Người dùng</th>
@@ -139,7 +163,7 @@ require_once __DIR__ . '/../includes/header.php';
                                 <span class="text-muted"><?= e($row['email']) ?></span>
                             </td>
                             <td><?= e(role_label($row['role'])) ?></td>
-                            <td><?= e($row['student_code'] ?: $row['teacher_code'] ?: '-') ?></td>
+                            <td><?= e($row['user_code'] ?: '-') ?></td>
                             <td>
                                 <span class="<?= (int) $row['is_locked'] === 1 ? 'badge-soft-danger' : 'badge-soft-success' ?>">
                                     <?= (int) $row['is_locked'] === 1 ? 'Đang khóa' : 'Hoạt động' ?>

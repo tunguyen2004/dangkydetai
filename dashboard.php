@@ -11,7 +11,7 @@ $page_title = 'Dashboard';
 $stats = [
     'students' => (int) db()->query("SELECT COUNT(*) FROM users WHERE role = 'student'")->fetchColumn(),
     'groups' => (int) db()->query('SELECT COUNT(*) FROM student_groups')->fetchColumn(),
-    'topics' => (int) db()->query('SELECT COUNT(*) FROM topics')->fetchColumn(),
+    'topics' => (int) db()->query('SELECT COUNT(*) FROM topic_classes')->fetchColumn(),
     'pending' => (int) db()->query("SELECT COUNT(*) FROM topic_registrations WHERE status = 'pending'")->fetchColumn(),
 ];
 
@@ -26,8 +26,9 @@ $stmt = db()->prepare(
     "SELECT g.name AS group_name, c.name AS class_name, t.title AS topic_title, r.status, r.created_at
      FROM topic_registrations r
      JOIN student_groups g ON g.id = r.group_id
-     JOIN classes c ON c.id = g.class_id
-     JOIN topics t ON t.id = r.topic_id
+     JOIN topic_classes tc ON tc.id = r.topic_class_id
+     JOIN classes c ON c.id = tc.class_id
+     JOIN topics t ON t.id = tc.topic_id
      $teacherFilter
      ORDER BY r.created_at DESC
      LIMIT 8"
@@ -43,17 +44,17 @@ require_once __DIR__ . '/includes/header.php';
         <p>Theo dõi nhanh tình trạng nhóm, đề tài và đăng ký.</p>
     </div>
     <?php if ($user['role'] === 'student'): ?>
-        <a class="btn btn-primary" href="<?= e(url('student/group.php')) ?>">Vào nhóm của em</a>
+        <a class="btn btn-primary" href="<?= e(url('student/group.php')) ?>">Vào nhóm của bạn</a>
     <?php elseif ($user['role'] === 'teacher'): ?>
         <a class="btn btn-primary" href="<?= e(url('teacher/registrations.php')) ?>">Duyệt đăng ký</a>
     <?php endif; ?>
 </section>
 
 <section class="grid-4 mb-4">
-    <article class="stat-card"><span>Sinh viên</span><strong><?= e((string) $stats['students']) ?></strong></article>
-    <article class="stat-card"><span>Nhóm</span><strong><?= e((string) $stats['groups']) ?></strong></article>
-    <article class="stat-card"><span>Đề tài</span><strong><?= e((string) $stats['topics']) ?></strong></article>
-    <article class="stat-card"><span>Chờ duyệt</span><strong><?= e((string) $stats['pending']) ?></strong></article>
+    <article class="stat-card stat-blue"><span>Sinh viên</span><strong><?= e((string) $stats['students']) ?></strong><span class="stat-icon">🎓</span></article>
+    <article class="stat-card stat-purple"><span>Nhóm</span><strong><?= e((string) $stats['groups']) ?></strong><span class="stat-icon">👥</span></article>
+    <article class="stat-card stat-emerald"><span>Đề tài đã mở</span><strong><?= e((string) $stats['topics']) ?></strong><span class="stat-icon">📋</span></article>
+    <article class="stat-card stat-amber"><span>Chờ duyệt</span><strong><?= e((string) $stats['pending']) ?></strong><span class="stat-icon">⏳</span></article>
 </section>
 
 <section class="card-panel">

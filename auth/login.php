@@ -27,6 +27,9 @@ if (is_post()) {
         $_SESSION['user_id'] = (int) $user['id'];
         $_SESSION['last_activity'] = time();
         log_activity('login', 'Đăng nhập hệ thống');
+        if ((int) ($user['must_change_password'] ?? 0) === 1) {
+            redirect('auth/change_password.php');
+        }
         redirect(post_login_redirect_path($user));
     }
 }

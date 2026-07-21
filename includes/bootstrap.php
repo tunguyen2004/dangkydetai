@@ -26,4 +26,12 @@ if (!empty($_SESSION['user_id'])) {
     }
 
     $_SESSION['last_activity'] = $now;
+
+    $script = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+    $isPasswordPage = str_ends_with($script, '/auth/change_password.php');
+    $isLogoutPage = str_ends_with($script, '/auth/logout.php');
+    $user = current_user();
+    if ($user && (int) ($user['must_change_password'] ?? 0) === 1 && !$isPasswordPage && !$isLogoutPage) {
+        redirect('auth/change_password.php');
+    }
 }
