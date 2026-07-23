@@ -35,3 +35,7 @@ if (!empty($_SESSION['user_id'])) {
         redirect('auth/change_password.php');
     }
 }
+
+// Shared hosting has no reliable scheduler, so each web request closes periods
+// whose final workflow deadline has passed.
+close_expired_registration_periods();

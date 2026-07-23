@@ -201,6 +201,38 @@ function active_registration_period(): ?array
     return $period ?: null;
 }
 
+function close_expired_registration_periods(): int
+{
+    $expired = db()->query(
+        "SELECT id, name
+         FROM registration_periods
+         WHERE status = 'open'
+           AND GREATEST(group_end, register_end) < NOW()"
+    )->fetchAll();
+
+    if (!$expired) {
+        return 0;
+    }
+
+    $update = db()->prepare("UPDATE registration_periods SET status = 'closed' WHERE id = ? AND status = 'open'");
+    $log = db()->prepare(
+        "INSERT INTO activity_logs (user_id, action, detail, created_at)
+         VALUES (NULL, 'auto_close_registration_period', ?, NOW())"
+    );
+    $closedCount = 0;
+
+    foreach ($expired as $period) {
+        $update->execute([(int) $period['id']]);
+
+        if ($update->rowCount() === 1) {
+            $log->execute(['Tự động đóng đợt đăng ký #' . $period['id'] . ' - ' . $period['name'] . ' vì đã hết thời gian.']);
+            $closedCount++;
+        }
+    }
+
+    return $closedCount;
+}
+
 function time_between(?string $start, ?string $end): bool
 {
     if (!$start || !$end) {
