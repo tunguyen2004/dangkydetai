@@ -10,26 +10,81 @@ function input_datetime(string $value): string
     return date('Y-m-d\TH:i', strtotime($value));
 }
 
+function registration_period_payload(): array
+{
+    $name = trim((string) ($_POST['name'] ?? ''));
+    $groupStart = str_replace('T', ' ', (string) ($_POST['group_start'] ?? '')) . ':00';
+    $groupEnd = str_replace('T', ' ', (string) ($_POST['group_end'] ?? '')) . ':00';
+    $registerStart = str_replace('T', ' ', (string) ($_POST['register_start'] ?? '')) . ':00';
+    $registerEnd = str_replace('T', ' ', (string) ($_POST['register_end'] ?? '')) . ':00';
+    $status = (string) ($_POST['status'] ?? 'draft');
+
+    if ($name === '' || strtotime($groupStart) === false || strtotime($groupEnd) === false
+        || strtotime($registerStart) === false || strtotime($registerEnd) === false) {
+        throw new RuntimeException('Vui lòng nhập đầy đủ thông tin và thời gian của đợt đăng ký.');
+    }
+    if (strtotime($groupStart) > strtotime($groupEnd) || strtotime($registerStart) > strtotime($registerEnd)) {
+        throw new RuntimeException('Thời gian kết thúc phải sau thời gian bắt đầu.');
+    }
+    if (!in_array($status, ['draft', 'open', 'closed'], true)) {
+        throw new RuntimeException('Trạng thái không hợp lệ.');
+    }
+
+    return [$name, $groupStart, $groupEnd, $registerStart, $registerEnd, $status];
+}
+
+function period_can_open(int $periodId): bool
+{
+    $assigned = db()->prepare('SELECT COUNT(*) FROM registration_period_classes WHERE registration_period_id = ?');
+    $assigned->execute([$periodId]);
+
+    return (int) $assigned->fetchColumn() > 0;
+}
+
 if (is_post()) {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
 
     try {
         if ($action === 'create') {
+            [$name, $groupStart, $groupEnd, $registerStart, $registerEnd, $status] = registration_period_payload();
+            if ($status === 'open') {
+                throw new RuntimeException('Hãy tạo đợt ở trạng thái Nháp, gán ít nhất một lớp rồi mới mở đợt.');
+            }
             $stmt = db()->prepare(
                 'INSERT INTO registration_periods (name, group_start, group_end, register_start, register_end, status)
                  VALUES (?, ?, ?, ?, ?, ?)'
             );
-            $stmt->execute([
-                trim((string) $_POST['name']),
-                str_replace('T', ' ', (string) $_POST['group_start']) . ':00',
-                str_replace('T', ' ', (string) $_POST['group_end']) . ':00',
-                str_replace('T', ' ', (string) $_POST['register_start']) . ':00',
-                str_replace('T', ' ', (string) $_POST['register_end']) . ':00',
-                (string) $_POST['status'],
-            ]);
-            log_activity('create_registration_period', 'Tạo đợt đăng ký ' . (string) $_POST['name']);
+            $stmt->execute([$name, $groupStart, $groupEnd, $registerStart, $registerEnd, $status]);
+            log_activity('create_registration_period', 'Tạo đợt đăng ký ' . $name);
             flash('success', 'Đã tạo đợt đăng ký.');
+        }
+
+        if ($action === 'update_period') {
+            $periodId = (int) ($_POST['registration_period_id'] ?? 0);
+            if ($periodId <= 0) {
+                throw new RuntimeException('Đợt đăng ký không hợp lệ.');
+            }
+            [$name, $groupStart, $groupEnd, $registerStart, $registerEnd, $status] = registration_period_payload();
+            if ($status === 'open' && !period_can_open($periodId)) {
+                throw new RuntimeException('Cần gán đợt đăng ký cho ít nhất một lớp trước khi mở.');
+            }
+
+            $stmt = db()->prepare(
+                'UPDATE registration_periods
+                 SET name = ?, group_start = ?, group_end = ?, register_start = ?, register_end = ?, status = ?
+                 WHERE id = ?'
+            );
+            $stmt->execute([$name, $groupStart, $groupEnd, $registerStart, $registerEnd, $status, $periodId]);
+            if ($stmt->rowCount() === 0) {
+                $exists = db()->prepare('SELECT COUNT(*) FROM registration_periods WHERE id = ?');
+                $exists->execute([$periodId]);
+                if ((int) $exists->fetchColumn() === 0) {
+                    throw new RuntimeException('Không tìm thấy đợt đăng ký cần sửa.');
+                }
+            }
+            log_activity('update_registration_period', 'Cập nhật đợt đăng ký #' . $periodId . ' - ' . $name);
+            flash('success', 'Đã cập nhật đợt đăng ký.');
         }
 
         if ($action === 'set_status') {
@@ -39,32 +94,13 @@ if (is_post()) {
                 throw new RuntimeException('Trạng thái không hợp lệ.');
             }
             if ($status === 'open') {
-                $assigned = db()->prepare('SELECT COUNT(*) FROM registration_period_classes WHERE registration_period_id = ?');
-                $assigned->execute([$periodId]);
-                if ((int) $assigned->fetchColumn() === 0) {
+                if (!period_can_open($periodId)) {
                     throw new RuntimeException('Cần gán đợt đăng ký cho ít nhất một lớp trước khi mở.');
                 }
             }
             db()->prepare('UPDATE registration_periods SET status = ? WHERE id = ?')->execute([$status, $periodId]);
             log_activity('set_period_status', 'Cập nhật trạng thái đợt #' . $periodId);
             flash('success', 'Đã cập nhật trạng thái đợt đăng ký.');
-        }
-
-        if ($action === 'update_dates') {
-            $periodId = (int) ($_POST['registration_period_id'] ?? 0);
-            db()->prepare(
-                'UPDATE registration_periods
-                 SET group_start = ?, group_end = ?, register_start = ?, register_end = ?
-                 WHERE id = ?'
-            )->execute([
-                str_replace('T', ' ', (string) $_POST['group_start']) . ':00',
-                str_replace('T', ' ', (string) $_POST['group_end']) . ':00',
-                str_replace('T', ' ', (string) $_POST['register_start']) . ':00',
-                str_replace('T', ' ', (string) $_POST['register_end']) . ':00',
-                $periodId,
-            ]);
-            log_activity('extend_registration_period', 'Cập nhật thời gian đợt #' . $periodId);
-            flash('success', 'Đã cập nhật thời gian đợt đăng ký.');
         }
 
         if ($action === 'assign_class') {
@@ -98,6 +134,15 @@ $classes = db()->query(
      ORDER BY c.name"
 )->fetchAll();
 
+$editPeriod = null;
+$editPeriodId = (int) ($_GET['edit'] ?? 0);
+if ($editPeriodId > 0) {
+    $stmt = db()->prepare('SELECT * FROM registration_periods WHERE id = ? LIMIT 1');
+    $stmt->execute([$editPeriodId]);
+    $editPeriod = $stmt->fetch() ?: null;
+}
+$openPeriodEditor = $editPeriod !== null || isset($_GET['create']);
+
 $page_title = 'Đợt đăng ký';
 require_once __DIR__ . '/../includes/header.php';
 ?>
@@ -106,22 +151,31 @@ require_once __DIR__ . '/../includes/header.php';
         <h1>Đợt đăng ký</h1>
         <p>Thiết lập thời gian tạo nhóm, đăng ký đề tài và gán đợt cho lớp.</p>
     </div>
+    <a class="btn btn-primary" href="<?= e(url('admin/registration_periods.php?create=1')) ?>">Tạo đợt</a>
 </section>
 
-<section class="card-panel rp-create-card mb-4">
-    <div class="panel-body">
+<dialog class="app-modal period-editor-modal" data-editor-modal <?= $openPeriodEditor ? 'data-open-on-load="1"' : '' ?>>
+    <section class="period-editor-modal-panel rp-create-card">
+        <div class="panel-body">
+            <div class="app-modal-header">
+                <h2 class="h4 fw-bold mb-0"><?= $editPeriod ? 'Sửa đợt đăng ký' : 'Tạo đợt đăng ký' ?></h2>
+                <a class="app-modal-close" href="<?= e(url('admin/registration_periods.php')) ?>" aria-label="Đóng">&times;</a>
+            </div>
         <div class="rp-form-header">
             <div class="rp-form-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
             </div>
             <div>
-                <h2 class="rp-form-title">Tạo đợt mới</h2>
+                <h2 class="rp-form-title"><?= $editPeriod ? 'Cập nhật thông tin đợt' : 'Thiết lập đợt mới' ?></h2>
                 <p class="rp-form-subtitle">Điền thông tin đợt đăng ký và thời gian áp dụng</p>
             </div>
         </div>
-        <form method="post">
+        <form method="post" data-async-form>
             <?= csrf_field() ?>
-            <input type="hidden" name="action" value="create">
+            <input type="hidden" name="action" value="<?= $editPeriod ? 'update_period' : 'create' ?>">
+            <?php if ($editPeriod): ?>
+                <input type="hidden" name="registration_period_id" value="<?= e((string) $editPeriod['id']) ?>">
+            <?php endif; ?>
 
             <!-- Row 1: Tên đợt + Trạng thái -->
             <div class="rp-field-row">
@@ -131,16 +185,20 @@ require_once __DIR__ . '/../includes/header.php';
                         <span class="rp-input-icon">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                         </span>
-                        <input class="rp-input" name="name" value="Đợt đăng ký đề tài bài tập lớn" required placeholder="Nhập tên đợt đăng ký">
+                        <input class="rp-input" name="name" value="<?= e($editPeriod['name'] ?? 'Đợt đăng ký đề tài bài tập lớn') ?>" required placeholder="Nhập tên đợt đăng ký">
                     </div>
                 </div>
                 <div class="rp-field" style="min-width:180px">
                     <label class="rp-label">Trạng thái</label>
                     <div class="rp-select-wrap">
                         <select class="rp-select" name="status">
-                            <option value="draft">📝 Nháp</option>
-                            <option value="open">🟢 Đang mở</option>
-                            <option value="closed">🔴 Đã đóng</option>
+                            <?php if (!$editPeriod): ?>
+                                <option value="draft" selected>📝 Nháp</option>
+                            <?php else: ?>
+                                <option value="draft" <?= $editPeriod['status'] === 'draft' ? 'selected' : '' ?>>📝 Nháp</option>
+                                <option value="open" <?= $editPeriod['status'] === 'open' ? 'selected' : '' ?>>🟢 Đang mở</option>
+                                <option value="closed" <?= $editPeriod['status'] === 'closed' ? 'selected' : '' ?>>🔴 Đã đóng</option>
+                            <?php endif; ?>
                         </select>
                         <span class="rp-select-arrow">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -162,7 +220,7 @@ require_once __DIR__ . '/../includes/header.php';
                             <span class="rp-datetime-icon">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                             </span>
-                            <input class="rp-datetime" name="group_start" type="datetime-local" required>
+                            <input class="rp-datetime" name="group_start" type="datetime-local" value="<?= e($editPeriod ? input_datetime($editPeriod['group_start']) : '') ?>" required>
                         </div>
                     </div>
                     <div class="rp-date-arrow">
@@ -174,7 +232,7 @@ require_once __DIR__ . '/../includes/header.php';
                             <span class="rp-datetime-icon">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                             </span>
-                            <input class="rp-datetime" name="group_end" type="datetime-local" required>
+                            <input class="rp-datetime" name="group_end" type="datetime-local" value="<?= e($editPeriod ? input_datetime($editPeriod['group_end']) : '') ?>" required>
                         </div>
                     </div>
                 </div>
@@ -193,7 +251,7 @@ require_once __DIR__ . '/../includes/header.php';
                             <span class="rp-datetime-icon">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                             </span>
-                            <input class="rp-datetime" name="register_start" type="datetime-local" required>
+                            <input class="rp-datetime" name="register_start" type="datetime-local" value="<?= e($editPeriod ? input_datetime($editPeriod['register_start']) : '') ?>" required>
                         </div>
                     </div>
                     <div class="rp-date-arrow">
@@ -205,7 +263,7 @@ require_once __DIR__ . '/../includes/header.php';
                             <span class="rp-datetime-icon">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                             </span>
-                            <input class="rp-datetime" name="register_end" type="datetime-local" required>
+                            <input class="rp-datetime" name="register_end" type="datetime-local" value="<?= e($editPeriod ? input_datetime($editPeriod['register_end']) : '') ?>" required>
                         </div>
                     </div>
                 </div>
@@ -214,12 +272,13 @@ require_once __DIR__ . '/../includes/header.php';
             <div class="rp-form-actions">
                 <button class="rp-btn-submit" type="submit">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Tạo đợt đăng ký
+                    <?= $editPeriod ? 'Lưu thay đổi' : 'Tạo đợt đăng ký' ?>
                 </button>
             </div>
         </form>
-    </div>
-</section>
+        </div>
+    </section>
+</dialog>
 
 <section class="card-panel">
     <div class="panel-body table-responsive">
@@ -264,7 +323,7 @@ require_once __DIR__ . '/../includes/header.php';
                         <td data-label="Thao t&#225;c">
                             <div class="rp-actions-stack">
                                 <!-- Trạng thái -->
-                                <form class="rp-action-row" method="post">
+                                <form class="rp-action-row" method="post" data-async-form>
                                     <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="set_status">
                                     <input type="hidden" name="registration_period_id" value="<?= e((string) $period['id']) ?>">
@@ -280,7 +339,7 @@ require_once __DIR__ . '/../includes/header.php';
                                 </form>
 
                                 <!-- Gán lớp -->
-                                <form class="rp-action-row" method="post">
+                                <form class="rp-action-row" method="post" data-async-form>
                                     <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="assign_class">
                                     <input type="hidden" name="registration_period_id" value="<?= e((string) $period['id']) ?>">
@@ -295,39 +354,8 @@ require_once __DIR__ . '/../includes/header.php';
                                     <button class="rp-btn-action rp-btn-assign" type="submit" <?= !$classes ? 'disabled' : '' ?>>Gán lớp</button>
                                 </form>
 
-                                <!-- Cập nhật giờ -->
-                                <form class="rp-update-dates" method="post">
-                                    <?= csrf_field() ?>
-                                    <input type="hidden" name="action" value="update_dates">
-                                    <input type="hidden" name="registration_period_id" value="<?= e((string) $period['id']) ?>">
-                                    <div class="rp-mini-dates">
-                                        <div class="rp-mini-date-group">
-                                            <span class="rp-mini-label"><span class="rp-time-dot" style="background:#8b5cf6"></span> Nhóm</span>
-                                            <div class="rp-mini-date-pair">
-                                                <div class="rp-datetime-wrap rp-datetime-sm">
-                                                    <input class="rp-datetime" name="group_start" type="datetime-local" value="<?= e(input_datetime($period['group_start'])) ?>">
-                                                </div>
-                                                <span class="rp-mini-sep">→</span>
-                                                <div class="rp-datetime-wrap rp-datetime-sm">
-                                                    <input class="rp-datetime" name="group_end" type="datetime-local" value="<?= e(input_datetime($period['group_end'])) ?>">
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="rp-mini-date-group">
-                                            <span class="rp-mini-label"><span class="rp-time-dot" style="background:#3b82f6"></span> Đăng ký</span>
-                                            <div class="rp-mini-date-pair">
-                                                <div class="rp-datetime-wrap rp-datetime-sm">
-                                                    <input class="rp-datetime" name="register_start" type="datetime-local" value="<?= e(input_datetime($period['register_start'])) ?>">
-                                                </div>
-                                                <span class="rp-mini-sep">→</span>
-                                                <div class="rp-datetime-wrap rp-datetime-sm">
-                                                    <input class="rp-datetime" name="register_end" type="datetime-local" value="<?= e(input_datetime($period['register_end'])) ?>">
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <button class="rp-btn-action rp-btn-update" type="submit">Cập nhật giờ</button>
-                                </form>
+                                <!-- Chỉnh sửa thông tin và thời gian trong popup -->
+                                <a class="rp-btn-action rp-btn-update" href="<?= e(url('admin/registration_periods.php?edit=' . $period['id'])) ?>">Sửa đợt</a>
                             </div>
                         </td>
                     </tr>

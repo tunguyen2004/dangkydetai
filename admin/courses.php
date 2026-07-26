@@ -5,20 +5,31 @@ declare(strict_types=1);
 require_once __DIR__ . '/../includes/bootstrap.php';
 require_role('admin');
 
+function next_course_code(): string
+{
+    $lastNumber = (int) db()->query(
+        "SELECT COALESCE(MAX(CAST(SUBSTRING(code, 3) AS UNSIGNED)), 0)
+         FROM courses
+         WHERE code REGEXP '^HP[0-9]+$'"
+    )->fetchColumn();
+
+    return 'HP' . str_pad((string) ($lastNumber + 1), 3, '0', STR_PAD_LEFT);
+}
+
 if (is_post()) {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
 
     try {
         if ($action === 'create') {
-            $code = trim((string) ($_POST['code'] ?? ''));
             $name = trim((string) ($_POST['name'] ?? ''));
             $description = trim((string) ($_POST['description'] ?? ''));
 
-            if ($code === '' || $name === '') {
-                throw new RuntimeException('Vui lòng nhập mã học phần và tên học phần.');
+            if ($name === '') {
+                throw new RuntimeException('Vui lòng nhập tên học phần.');
             }
 
+            $code = next_course_code();
             db()->prepare('INSERT INTO courses (code, name, description) VALUES (?, ?, ?)')
                 ->execute([$code, $name, $description ?: null]);
             log_activity('create_course', 'Tạo học phần ' . $code);
@@ -53,18 +64,18 @@ require_once __DIR__ . '/../includes/header.php';
 <section class="card-panel mb-4">
     <div class="panel-body">
         <h2 class="h4 fw-bold mb-3">Tạo học phần</h2>
-        <form class="row g-3" method="post">
+        <form class="row g-3" method="post" data-async-form>
             <?= csrf_field() ?>
             <input type="hidden" name="action" value="create">
             <div class="col-md-3">
                 <label class="form-label">Mã học phần</label>
-                <input class="form-control" name="code" placeholder="WEB301" required>
+                <input class="form-control" value="Tự tạo khi lưu: HP001, HP002..." disabled>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <label class="form-label">Tên học phần</label>
                 <input class="form-control" name="name" placeholder="Công nghệ Web" required>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-4">
                 <label class="form-label">Mô tả</label>
                 <input class="form-control" name="description" placeholder="Mô tả ngắn">
             </div>

@@ -5,27 +5,137 @@ declare(strict_types=1);
 require_once __DIR__ . '/../includes/bootstrap.php';
 require_role('admin');
 
+function class_payload(): array
+{
+    $name = trim((string) ($_POST['name'] ?? ''));
+    $courseId = (int) ($_POST['course_id'] ?? 0);
+    $teacherId = (int) ($_POST['teacher_id'] ?? 0);
+    $minMembers = max(1, (int) ($_POST['min_members'] ?? 0));
+    $maxMembers = max(1, (int) ($_POST['max_members'] ?? 0));
+    $maxGroups = max(1, (int) ($_POST['max_groups'] ?? 0));
+
+    if ($name === '' || $courseId <= 0 || $teacherId <= 0) {
+        throw new RuntimeException('Vui lòng nhập đủ tên lớp, học phần và giảng viên phụ trách.');
+    }
+    if ($minMembers > $maxMembers) {
+        throw new RuntimeException('Số thành viên tối thiểu không được lớn hơn số thành viên tối đa.');
+    }
+
+    $courseStmt = db()->prepare('SELECT COUNT(*) FROM courses WHERE id = ?');
+    $courseStmt->execute([$courseId]);
+    if ((int) $courseStmt->fetchColumn() === 0) {
+        throw new RuntimeException('Học phần không hợp lệ.');
+    }
+
+    $teacherStmt = db()->prepare("SELECT COUNT(*) FROM users WHERE id = ? AND role = 'teacher' AND is_locked = 0");
+    $teacherStmt->execute([$teacherId]);
+    if ((int) $teacherStmt->fetchColumn() === 0) {
+        throw new RuntimeException('Giảng viên phụ trách không hợp lệ hoặc đã bị khóa.');
+    }
+
+    return [$courseId, $teacherId, $name, $minMembers, $maxMembers, $maxGroups, isset($_POST['allow_self_group']) ? 1 : 0];
+}
+
+function class_has_runtime_data(int $classId): bool
+{
+    $stmt = db()->prepare('SELECT COUNT(*) FROM student_groups WHERE class_id = ?');
+    $stmt->execute([$classId]);
+
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+function class_group_stats(int $classId): array
+{
+    $stmt = db()->prepare(
+        'SELECT COUNT(*) AS group_count,
+                MIN(member_count) AS min_member_count,
+                MAX(member_count) AS max_member_count
+         FROM (
+             SELECT g.id, COUNT(gm.user_id) AS member_count
+             FROM student_groups g
+             LEFT JOIN group_members gm ON gm.group_id = g.id
+             WHERE g.class_id = ?
+             GROUP BY g.id
+         ) AS group_stats'
+    );
+    $stmt->execute([$classId]);
+
+    return $stmt->fetch() ?: ['group_count' => 0, 'min_member_count' => null, 'max_member_count' => null];
+}
+
 if (is_post()) {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
 
     try {
         if ($action === 'create') {
+            [$courseId, $teacherId, $name, $minMembers, $maxMembers, $maxGroups, $allowSelfGroup] = class_payload();
             $stmt = db()->prepare(
                 'INSERT INTO classes (course_id, teacher_id, name, min_members, max_members, max_groups, allow_self_group)
                  VALUES (?, ?, ?, ?, ?, ?, ?)'
             );
-            $stmt->execute([
-                (int) $_POST['course_id'],
-                (int) $_POST['teacher_id'],
-                trim((string) $_POST['name']),
-                max(1, (int) $_POST['min_members']),
-                max(1, (int) $_POST['max_members']),
-                max(1, (int) $_POST['max_groups']),
-                isset($_POST['allow_self_group']) ? 1 : 0,
-            ]);
-            log_activity('create_class', 'Tạo lớp ' . (string) $_POST['name']);
+            $stmt->execute([$courseId, $teacherId, $name, $minMembers, $maxMembers, $maxGroups, $allowSelfGroup]);
+            log_activity('create_class', 'Tạo lớp ' . $name);
             flash('success', 'Đã tạo lớp học phần.');
+        }
+
+        if ($action === 'update') {
+            $classId = (int) ($_POST['class_id'] ?? 0);
+            if ($classId <= 0) {
+                throw new RuntimeException('Lớp học phần không hợp lệ.');
+            }
+
+            $existingStmt = db()->prepare('SELECT * FROM classes WHERE id = ? LIMIT 1');
+            $existingStmt->execute([$classId]);
+            $existingClass = $existingStmt->fetch();
+            if (!$existingClass) {
+                throw new RuntimeException('Không tìm thấy lớp học phần.');
+            }
+
+            [$courseId, $teacherId, $name, $minMembers, $maxMembers, $maxGroups, $allowSelfGroup] = class_payload();
+            $groupStats = class_group_stats($classId);
+            $groupCount = (int) $groupStats['group_count'];
+
+            if ($groupCount > 0 && $courseId !== (int) $existingClass['course_id']) {
+                throw new RuntimeException('Không thể đổi học phần gốc khi lớp đã phát sinh nhóm.');
+            }
+            if ($groupCount > $maxGroups) {
+                throw new RuntimeException('Số nhóm tối đa mới không được nhỏ hơn số nhóm đã tồn tại.');
+            }
+            if ($groupCount > 0
+                && ($minMembers > (int) $groupStats['min_member_count']
+                    || $maxMembers < (int) $groupStats['max_member_count'])) {
+                throw new RuntimeException('Quy định số thành viên mới sẽ làm một hoặc nhiều nhóm hiện có không còn hợp lệ.');
+            }
+
+            db()->prepare(
+                'UPDATE classes
+                 SET course_id = ?, teacher_id = ?, name = ?, min_members = ?, max_members = ?, max_groups = ?, allow_self_group = ?
+                 WHERE id = ?'
+            )->execute([$courseId, $teacherId, $name, $minMembers, $maxMembers, $maxGroups, $allowSelfGroup, $classId]);
+            log_activity('update_class', 'Cập nhật lớp #' . $classId . ' - ' . $name);
+            flash('success', 'Đã cập nhật lớp học phần.');
+        }
+
+        if ($action === 'delete') {
+            $classId = (int) ($_POST['class_id'] ?? 0);
+            if ($classId <= 0) {
+                throw new RuntimeException('Lớp học phần không hợp lệ.');
+            }
+            if (class_has_runtime_data($classId)) {
+                throw new RuntimeException('Lớp đã phát sinh nhóm hoặc đăng ký đề tài nên không thể xóa để bảo toàn lịch sử.');
+            }
+
+            $nameStmt = db()->prepare('SELECT name FROM classes WHERE id = ?');
+            $nameStmt->execute([$classId]);
+            $className = $nameStmt->fetchColumn();
+            if ($className === false) {
+                throw new RuntimeException('Không tìm thấy lớp học phần.');
+            }
+
+            db()->prepare('DELETE FROM classes WHERE id = ?')->execute([$classId]);
+            log_activity('delete_class', 'Xóa lớp #' . $classId . ' - ' . $className);
+            flash('success', 'Đã xóa lớp học phần chưa phát sinh dữ liệu.');
         }
 
         if ($action === 'add_students') {
@@ -103,6 +213,18 @@ $classes = db()->query(
      ORDER BY c.id DESC"
 )->fetchAll();
 
+$editClass = null;
+$editClassHasRuntimeData = false;
+$editClassId = (int) ($_GET['edit'] ?? 0);
+if ($editClassId > 0) {
+    $stmt = db()->prepare('SELECT * FROM classes WHERE id = ? LIMIT 1');
+    $stmt->execute([$editClassId]);
+    $editClass = $stmt->fetch() ?: null;
+
+    $editClassHasRuntimeData = $editClass ? class_has_runtime_data($editClassId) : false;
+}
+$openClassEditor = $editClass !== null || isset($_GET['create']);
+
 $page_title = 'Lớp học phần';
 require_once __DIR__ . '/../includes/header.php';
 ?>
@@ -111,61 +233,79 @@ require_once __DIR__ . '/../includes/header.php';
         <h1>Lớp học phần</h1>
         <p>Admin tạo lớp, phân công giảng viên, gán sinh viên và gán đợt đăng ký.</p>
     </div>
+    <a class="btn btn-primary" href="<?= e(url('admin/classes.php?create=1')) ?>">Tạo lớp</a>
 </section>
 
-<section class="card-panel mb-4">
-    <div class="panel-body">
-        <h2 class="h4 fw-bold mb-3">Tạo lớp</h2>
+<dialog class="app-modal class-editor-modal" data-editor-modal <?= $openClassEditor ? 'data-open-on-load="1"' : '' ?>>
+    <section class="class-editor-modal-panel">
+        <div class="panel-body">
+            <div class="app-modal-header">
+                <h2 class="h4 fw-bold mb-0"><?= $editClass ? 'Sửa lớp học phần' : 'Tạo lớp học phần' ?></h2>
+                <a class="app-modal-close" href="<?= e(url('admin/classes.php')) ?>" aria-label="Đóng">&times;</a>
+            </div>
+        <?php if ($editClassHasRuntimeData): ?>
+            <p class="text-muted mb-3">Lớp đã có nhóm: không thể đổi học phần gốc; các quy định mới phải vẫn phù hợp với toàn bộ nhóm hiện có.</p>
+        <?php endif; ?>
         <form class="row g-3" method="post" data-async-form>
             <?= csrf_field() ?>
-            <input type="hidden" name="action" value="create">
+            <input type="hidden" name="action" value="<?= $editClass ? 'update' : 'create' ?>">
+            <?php if ($editClass): ?>
+                <input type="hidden" name="class_id" value="<?= e((string) $editClass['id']) ?>">
+            <?php endif; ?>
             <div class="col-md-3">
                 <label class="form-label">Tên lớp</label>
-                <input class="form-control" name="name" placeholder="Công nghệ Web - K73.CNTT01" required>
+                <input class="form-control" name="name" value="<?= e($editClass['name'] ?? '') ?>" placeholder="Công nghệ Web - K73.CNTT01" required>
             </div>
             <div class="col-md-3">
                 <label class="form-label">Học phần</label>
-                <select class="form-select" name="course_id" data-custom-select required>
+                <select class="form-select" name="course_id" data-custom-select required <?= $editClassHasRuntimeData ? 'disabled' : '' ?>>
                     <?php foreach ($courses as $course): ?>
-                        <option value="<?= e((string) $course['id']) ?>"><?= e($course['code'] . ' - ' . $course['name']) ?></option>
+                        <option value="<?= e((string) $course['id']) ?>" <?= $editClass && (int) $editClass['course_id'] === (int) $course['id'] ? 'selected' : '' ?>><?= e($course['code'] . ' - ' . $course['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
+                <?php if ($editClassHasRuntimeData): ?>
+                    <input type="hidden" name="course_id" value="<?= e((string) $editClass['course_id']) ?>">
+                <?php endif; ?>
             </div>
             <div class="col-md-3">
                 <label class="form-label">Giảng viên</label>
                 <select class="form-select" name="teacher_id" data-custom-select required>
                     <?php foreach ($teachers as $teacher): ?>
-                        <option value="<?= e((string) $teacher['id']) ?>"><?= e($teacher['name']) ?></option>
+                        <option value="<?= e((string) $teacher['id']) ?>" <?= $editClass && (int) $editClass['teacher_id'] === (int) $teacher['id'] ? 'selected' : '' ?>><?= e($teacher['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="col-md-1">
                 <label class="form-label">Tối thiểu</label>
-                <input class="form-control" name="min_members" type="number" min="1" value="2">
+                <input class="form-control" name="min_members" type="number" min="1" value="<?= e((string) ($editClass['min_members'] ?? 2)) ?>">
             </div>
             <div class="col-md-1">
                 <label class="form-label">Tối đa</label>
-                <input class="form-control" name="max_members" type="number" min="1" value="4">
+                <input class="form-control" name="max_members" type="number" min="1" value="<?= e((string) ($editClass['max_members'] ?? 4)) ?>">
             </div>
             <div class="col-md-1">
                 <label class="form-label">Nhóm</label>
-                <input class="form-control" name="max_groups" type="number" min="1" value="12">
+                <input class="form-control" name="max_groups" type="number" min="1" value="<?= e((string) ($editClass['max_groups'] ?? 12)) ?>">
             </div>
             <div class="col-md-3 d-flex align-items-end">
                 <label class="form-check fw-bold">
-                    <input class="form-check-input" name="allow_self_group" type="checkbox" checked>
+                    <input class="form-check-input" name="allow_self_group" type="checkbox" <?= !$editClass || (int) $editClass['allow_self_group'] === 1 ? 'checked' : '' ?>>
                     Cho phép sinh viên tự tạo nhóm
                 </label>
             </div>
-            <div class="col-md-2 d-flex align-items-end">
-                <button class="btn btn-primary w-100" type="submit" <?= (!$courses || !$teachers) ? 'disabled' : '' ?>>Tạo lớp</button>
+            <div class="col-md-3 d-flex align-items-end gap-2 class-editor-actions">
+                <button class="btn btn-primary <?= $editClass ? 'flex-grow-1' : 'w-100' ?>" type="submit" <?= (!$courses || !$teachers) ? 'disabled' : '' ?>><?= $editClass ? 'Lưu thay đổi' : 'Tạo lớp' ?></button>
+                <?php if ($editClass): ?>
+                    <a class="btn btn-outline-secondary" href="<?= e(url('admin/classes.php')) ?>">Hủy</a>
+                <?php endif; ?>
             </div>
         </form>
         <?php if (!$courses): ?>
             <p class="text-muted mt-3 mb-0">Cần tạo học phần trước khi tạo lớp.</p>
         <?php endif; ?>
-    </div>
-</section>
+        </div>
+    </section>
+</dialog>
 
 <section class="card-panel mb-4" data-bulk-student-assignment>
     <div class="panel-body">
@@ -248,6 +388,7 @@ require_once __DIR__ . '/../includes/header.php';
                         <th>Quy định nhóm</th>
                         <th>Số liệu</th>
                         <th>Đợt đăng ký</th>
+                        <th>Thao tác</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -277,10 +418,25 @@ require_once __DIR__ . '/../includes/header.php';
                                     <button class="btn btn-sm btn-outline-primary" type="submit" <?= !$registrationPeriods ? 'disabled' : '' ?>>Gán đợt</button>
                                 </form>
                             </td>
+                            <td>
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <a class="btn btn-sm btn-outline-primary" href="<?= e(url('admin/classes.php?edit=' . $class['id'])) ?>">Sửa</a>
+                                    <?php if ((int) $class['group_count'] === 0): ?>
+                                        <form method="post" data-async-form onsubmit="return confirm('Xóa lớp này? Sinh viên và các gán đợt chưa phát sinh sẽ bị gỡ khỏi lớp.')">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="class_id" value="<?= e((string) $class['id']) ?>">
+                                            <button class="btn btn-sm btn-outline-danger" type="submit">Xóa</button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="badge-soft-secondary">Không xóa dữ liệu đã phát sinh</span>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                     <?php if (!$classes): ?>
-                        <tr><td colspan="5" class="empty-state">Chưa có lớp học phần nào.</td></tr>
+                        <tr><td colspan="6" class="empty-state">Chưa có lớp học phần nào.</td></tr>
                     <?php endif; ?>
                 </tbody>
             </table>

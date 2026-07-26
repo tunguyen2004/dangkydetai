@@ -144,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         wrapper.classList.add('is-open');
         trigger.setAttribute('aria-expanded', 'true');
-        document.body.appendChild(menu);
+        (select.closest('dialog') || document.body).appendChild(menu);
         menu.hidden = false;
         positionMenu();
       });
@@ -231,6 +231,27 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   };
 
+  const initEditorModals = (root = document) => {
+    root.querySelectorAll('[data-editor-modal]').forEach((modal) => {
+      if (modal.dataset.modalReady === '1') return;
+      modal.dataset.modalReady = '1';
+
+      if (modal.dataset.openOnLoad === '1' && typeof modal.showModal === 'function') {
+        requestAnimationFrame(() => modal.showModal());
+      }
+
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) modal.close();
+      });
+      modal.addEventListener('close', () => {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete('create');
+        nextUrl.searchParams.delete('edit');
+        window.history.replaceState(null, '', nextUrl);
+      });
+    });
+  };
+
   const refreshMainContent = async (form, submitter) => {
     const formData = new FormData(form);
     if (submitter?.name) formData.append(submitter.name, submitter.value);
@@ -271,6 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initFlashMessages(currentMain);
     initCustomSelects(currentMain);
     initBulkStudentAssignments(currentMain);
+    initEditorModals(currentMain);
     requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
   };
 
@@ -349,6 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initFlashMessages();
   initCustomSelects();
   initBulkStudentAssignments();
+  initEditorModals();
 
   document.querySelectorAll('.stat-card, .card-panel').forEach((element, index) => {
     element.style.opacity = '0';
