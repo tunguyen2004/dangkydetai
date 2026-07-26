@@ -4,7 +4,7 @@
 
 // define('APP_NAME', 'Hệ thống đăng ký đề tài');
 // define('APP_SHORT_NAME', 'DKDT');
-
+// define('DB_PORT', 3306);
 // define('DB_HOST', '127.0.0.1');
 // define('DB_NAME', 'K73_nhom10_dangky_detai');
 // define('DB_USER', 'root');
