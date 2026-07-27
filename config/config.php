@@ -17,10 +17,6 @@
 
 // date_default_timezone_set('Asia/Bangkok');
 
-// $mailConfigPath = __DIR__ . DIRECTORY_SEPARATOR . 'mail.php';
-// if (is_file($mailConfigPath)) {
-//     require_once $mailConfigPath;
-// }
 
 
 
@@ -41,3 +37,9 @@ define('ITEMS_PER_PAGE', 8);
 define('SESSION_TIMEOUT_SECONDS', 20 * 60);
 
 date_default_timezone_set('Asia/Bangkok');
+
+
+$mailConfigPath = __DIR__ . DIRECTORY_SEPARATOR . 'mail.php';
+if (is_file($mailConfigPath)) {
+    require_once $mailConfigPath;
+}
