@@ -22,12 +22,6 @@ function url(string $path = ''): string
     $base = rtrim(app_base_url(), '/');
     $path = ltrim($path, '/');
 
-    if (strtolower($path) === 'index.php') {
-        $path = '';
-    } else {
-        $path = preg_replace('/\.php(?=(?:\?|$))/i', '', $path) ?? $path;
-    }
-
     return $path === '' ? ($base === '' ? '/' : $base . '/') : $base . '/' . $path;
 }
 
