@@ -40,12 +40,25 @@ if (is_post()) {
     try {
         if ($action === 'create') {
             $name = trim((string) ($_POST['name'] ?? ''));
-            $email = trim((string) ($_POST['email'] ?? ''));
+            $email = mb_strtolower(trim((string) ($_POST['email'] ?? '')));
             $role = (string) ($_POST['role'] ?? 'student');
             $password = (string) ($_POST['password'] ?? '');
+            $phone = trim((string) ($_POST['phone'] ?? ''));
 
             if ($name === '' || $email === '' || $password === '' || !in_array($role, ['admin', 'teacher', 'student'], true)) {
                 throw new RuntimeException('Vui lòng nhập đủ thông tin tài khoản.');
+            }
+            if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+                throw new RuntimeException('Email không đúng định dạng.');
+            }
+            if (preg_match('/^\d{10}$/', $phone) !== 1) {
+                throw new RuntimeException('Số điện thoại phải gồm đúng 10 chữ số.');
+            }
+
+            $emailExists = db()->prepare('SELECT COUNT(*) FROM users WHERE email = ?');
+            $emailExists->execute([$email]);
+            if ((int) $emailExists->fetchColumn() > 0) {
+                throw new RuntimeException('Email này đã được sử dụng. Vui lòng nhập email khác.');
             }
 
             $userCode = next_user_code($role);
@@ -60,7 +73,7 @@ if (is_post()) {
                 password_hash($password, PASSWORD_DEFAULT),
                 $role,
                 $userCode,
-                trim((string) ($_POST['phone'] ?? '')) ?: null,
+                $phone,
             ]);
             log_activity('create_user', 'Tạo tài khoản ' . $email . ' với mã ' . $userCode);
             flash('success', 'Đã tạo tài khoản mới. Mã người dùng: ' . $userCode);
@@ -82,6 +95,8 @@ if (is_post()) {
             log_activity('reset_password', 'Reset mật khẩu tài khoản #' . $userId);
             flash('success', 'Đã đặt lại mật khẩu thành 123456. Người dùng sẽ phải đổi mật khẩu sau khi đăng nhập.');
         }
+    } catch (PDOException $exception) {
+        flash('danger', 'Không thể lưu dữ liệu. Email hoặc mã người dùng có thể đã tồn tại.');
     } catch (Throwable $exception) {
         flash('danger', $exception->getMessage());
     }
@@ -128,7 +143,9 @@ require_once __DIR__ . '/../includes/header.php';
             </div>
             <div class="col-md-2">
                 <label class="form-label">SĐT</label>
-                <input class="form-control" name="phone">
+                <input class="form-control" name="phone" type="tel" inputmode="numeric" autocomplete="tel"
+                    pattern="[0-9]{10}" minlength="10" maxlength="10" data-digits-only required
+                    placeholder="Ví dụ: 0912345678" title="Số điện thoại gồm đúng 10 chữ số">
             </div>
             <div class="col-md-3">
                 <label class="form-label">Mã người dùng</label>

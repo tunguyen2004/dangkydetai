@@ -70,6 +70,7 @@ require_once __DIR__ . '/../includes/header.php';
             <input class="form-control" id="password" name="password" type="password" required>
         </div>
         <button class="btn btn-primary w-100" type="submit">Đăng nhập</button>
+        <p class="auth-secondary-link"><a href="<?= e(url('auth/forgot_password.php')) ?>">Quên mật khẩu?</a></p>
         <p class="text-muted mt-4 mb-0">
             Mẫu: admin@k73.test/admin123, giangvien@k73.test/gv123456, sv01@k73.test/sv123456.
         </p>

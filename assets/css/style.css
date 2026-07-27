@@ -93,7 +93,8 @@ img{max-width:100%}
 /* Modal editor used for compact admin create and edit forms. */
 .app-modal{width:min(900px,calc(100vw - 32px));max-height:calc(100vh - 32px);margin:auto;padding:0;border:0;border-radius:12px;background:transparent;color:var(--text);overflow:visible;box-shadow:var(--shadow-lg)}
 .app-modal::backdrop{background:rgba(15,23,42,.52);backdrop-filter:blur(3px)}
-.class-editor-modal-panel,.period-editor-modal-panel{max-height:calc(100vh - 32px);border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:auto}
+.class-editor-modal-panel,.period-editor-modal-panel,.class-members-modal-panel{max-height:calc(100vh - 32px);border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:auto}
+.class-members-modal{width:min(1080px,calc(100vw - 32px))}
 .app-modal-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
 .app-modal-close{display:grid;place-items:center;width:34px;height:34px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--muted);font-size:25px;line-height:1}
 .app-modal-close:hover{color:var(--danger);border-color:#fecaca;background:#fef2f2}
@@ -145,6 +146,8 @@ img{max-width:100%}
 .form-label{font-weight:700;font-size:13px;color:var(--text);margin-bottom:6px}
 .form-control,.form-select{border-color:var(--line);border-radius:8px;min-height:42px;font-size:14px;transition:border-color var(--transition),box-shadow var(--transition)}
 .form-control:focus,.form-select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+.form-control.is-invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(239,68,68,.12)}
+.form-field-error{margin-top:5px;color:#dc2626;font-size:12px;font-weight:600;line-height:1.35}
 .btn{border-radius:8px;font-weight:700;font-size:14px;transition:all var(--transition);padding:8px 20px}
 .btn-primary{background:var(--primary);border-color:var(--primary)}
 .btn-primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);transform:translateY(-1px);box-shadow:0 4px 12px rgba(59,130,246,.3)}
@@ -216,6 +219,9 @@ img{max-width:100%}
 
 .auth-form-area{display:grid;align-items:center;padding:32px;background:var(--bg)}
 .auth-card{width:min(440px,100%);margin:0 auto;padding:32px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow)}
+.auth-secondary-link{margin:16px 0 0;text-align:center;font-size:14px;font-weight:700}
+.reset-preview{margin-top:20px;padding:12px 14px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#1e40af;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+.reset-preview a{font-weight:800}
 
 /* ========== 13. Landing Page (no sidebar) ========== */
 .landing-header{background:var(--dark);color:#fff;padding:0 40px;min-height:72px;display:flex;align-items:center;justify-content:space-between}
@@ -261,6 +267,19 @@ img{max-width:100%}
 .activity-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;color:var(--muted);font-size:13px}
 .activity-pagination-links{display:flex;gap:8px;align-items:center}
 .activity-pagination .btn{padding:7px 12px}
+.class-list-filter-card{margin-bottom:20px}
+.class-list-filter-form{display:grid;grid-template-columns:minmax(240px,1.45fr) minmax(190px,.95fr) minmax(165px,.75fr) minmax(120px,.55fr) auto;gap:12px;align-items:end}
+.class-list-filter-actions{display:flex;gap:8px;align-items:center}
+.class-list-filter-actions .btn{white-space:nowrap}
+.class-list-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
+.class-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;color:var(--muted);font-size:13px}
+.class-pagination-links{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.class-pagination .btn{min-width:38px;padding:7px 12px}
+.membership-helper{margin:0 0 18px;padding:12px 14px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#1e40af;font-size:13px;line-height:1.5}
+.membership-table-wrap{max-height:calc(100vh - 230px)}
+.membership-actions{display:grid;gap:8px;min-width:280px}
+.membership-transfer-form{display:flex;align-items:center;gap:8px}
+.membership-transfer-form .academic-select{min-width:180px;flex:1}
 .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:70;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
 
 /* ========== 18. Animations ========== */
@@ -392,7 +411,8 @@ img{max-width:100%}
   .rp-date-arrow{display:none}
   .rp-field-row{flex-direction:column;gap:12px}
   .activity-filter-form{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .activity-filter-actions{grid-column:span 2}
+  .class-list-filter-form{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .activity-filter-actions,.class-list-filter-actions{grid-column:span 2}
 }
 @media(max-width:768px){
   .grid-4,.grid-3{grid-template-columns:1fr 1fr}
@@ -451,6 +471,12 @@ img{max-width:100%}
   .classes-mobile-table td:nth-child(4)::before{content:"Số liệu"}
   .classes-mobile-table td:nth-child(5)::before{content:"Đợt đăng ký"}
   .classes-mobile-table td:nth-child(6)::before{content:"Thao tác"}
+  .class-members-mobile-table td:nth-child(1)::before{content:"Sinh viên"}
+  .class-members-mobile-table td:nth-child(2)::before{content:"Tham gia lớp"}
+  .class-members-mobile-table td:nth-child(3)::before{content:"Thao tác"}
+  .class-members-mobile-table .membership-actions{min-width:0}
+  .class-members-mobile-table .membership-transfer-form{align-items:stretch;flex-wrap:wrap}
+  .class-members-mobile-table .membership-transfer-form .academic-select{min-width:180px;flex:1 1 180px}
   .activity-log-mobile-table td:nth-child(1)::before{content:"Thời gian"}
   .activity-log-mobile-table td:nth-child(2)::before{content:"Người thực hiện"}
   .activity-log-mobile-table td:nth-child(3)::before{content:"Thao tác"}
@@ -498,10 +524,10 @@ img{max-width:100%}
   .rp-btn-submit{width:100%;justify-content:center}
   .landing-header,.site-footer{padding-left:20px;padding-right:20px}
   .site-footer{flex-direction:column;gap:6px}
-  .activity-summary,.activity-filter-form{grid-template-columns:1fr}
-  .activity-filter-actions{grid-column:auto;display:grid;grid-template-columns:1fr 1fr}
-  .activity-filter-actions .btn{padding-left:12px;padding-right:12px}
-  .activity-pagination{align-items:flex-start;flex-direction:column}
+  .activity-summary,.activity-filter-form,.class-list-filter-form{grid-template-columns:1fr}
+  .activity-filter-actions,.class-list-filter-actions{grid-column:auto;display:grid;grid-template-columns:1fr 1fr}
+  .activity-filter-actions .btn,.class-list-filter-actions .btn{padding-left:12px;padding-right:12px}
+  .activity-pagination,.class-pagination{align-items:flex-start;flex-direction:column}
   .app-modal{width:calc(100vw - 20px);max-height:calc(100vh - 20px)}
-  .class-editor-modal-panel,.period-editor-modal-panel{max-height:calc(100vh - 20px)}
+  .class-editor-modal-panel,.period-editor-modal-panel,.class-members-modal-panel{max-height:calc(100vh - 20px)}
 }

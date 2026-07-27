@@ -22,6 +22,12 @@ function url(string $path = ''): string
     $base = rtrim(app_base_url(), '/');
     $path = ltrim($path, '/');
 
+    if (strtolower($path) === 'index.php') {
+        $path = '';
+    } else {
+        $path = preg_replace('/\.php(?=(?:\?|$))/i', '', $path) ?? $path;
+    }
+
     return $path === '' ? ($base === '' ? '/' : $base . '/') : $base . '/' . $path;
 }
 
@@ -38,6 +44,79 @@ function redirect(string $path): never
 {
     header('Location: ' . url($path));
     exit;
+}
+
+function is_local_environment(): bool
+{
+    $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
+    $host = explode(':', $host)[0];
+
+    return in_array($host, ['localhost', '127.0.0.1', '::1'], true);
+}
+
+function app_absolute_url(): string
+{
+    $https = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+    $scheme = $https ? 'https' : 'http';
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+
+    return $scheme . '://' . $host;
+}
+
+function password_reset_url(string $token): string
+{
+    return app_absolute_url() . url('auth/reset_password.php?token=' . rawurlencode($token));
+}
+
+function smtp_is_configured(): bool
+{
+    foreach (['SMTP_HOST', 'SMTP_USERNAME', 'SMTP_PASSWORD', 'SMTP_FROM_EMAIL'] as $constant) {
+        if (!defined($constant) || trim((string) constant($constant)) === '') {
+            return false;
+        }
+    }
+
+    return defined('SMTP_PORT') && (int) SMTP_PORT > 0;
+}
+
+function send_password_reset_email(string $email, string $name, string $resetUrl): bool
+{
+    $autoload = ROOT_PATH . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
+    if (!smtp_is_configured() || !is_file($autoload)) {
+        return false;
+    }
+
+    require_once $autoload;
+
+    try {
+        $mailer = new \PHPMailer\PHPMailer\PHPMailer(true);
+        $mailer->isSMTP();
+        $mailer->Host = SMTP_HOST;
+        $mailer->Port = (int) SMTP_PORT;
+        $mailer->SMTPAuth = true;
+        $mailer->Username = SMTP_USERNAME;
+        $mailer->Password = SMTP_PASSWORD;
+        $mailer->CharSet = 'UTF-8';
+        $mailer->Timeout = 15;
+        $mailer->SMTPDebug = 0;
+        $mailer->SMTPSecure = strtolower((string) (defined('SMTP_ENCRYPTION') ? SMTP_ENCRYPTION : 'tls')) === 'ssl'
+            ? \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
+            : \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+        $mailer->setFrom(SMTP_FROM_EMAIL, defined('SMTP_FROM_NAME') ? SMTP_FROM_NAME : APP_NAME);
+        $mailer->addAddress($email, $name);
+        $mailer->isHTML(false);
+        $mailer->Subject = 'Đặt lại mật khẩu - ' . APP_NAME;
+        $mailer->Body = "Chào " . $name . ",\n\n"
+            . "Bạn đã yêu cầu đặt lại mật khẩu. Mở liên kết sau để đặt mật khẩu mới:\n"
+            . $resetUrl . "\n\n"
+            . "Liên kết có hiệu lực trong 15 phút và chỉ dùng được một lần. Nếu bạn không yêu cầu, vui lòng bỏ qua email này.";
+        $mailer->send();
+
+        return true;
+    } catch (Throwable $exception) {
+        error_log('Password reset email failed: ' . $exception->getMessage());
+        return false;
+    }
 }
 
 function is_post(): bool

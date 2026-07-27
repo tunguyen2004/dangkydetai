@@ -247,7 +247,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const nextUrl = new URL(window.location.href);
         nextUrl.searchParams.delete('create');
         nextUrl.searchParams.delete('edit');
+        nextUrl.searchParams.delete('members');
         window.history.replaceState(null, '', nextUrl);
+      });
+    });
+  };
+
+  const initDigitsOnlyInputs = (root = document) => {
+    root.querySelectorAll('[data-digits-only]').forEach((input) => {
+      if (input.dataset.digitsReady === '1') return;
+      input.dataset.digitsReady = '1';
+
+      input.addEventListener('input', () => {
+        const maxLength = Number.parseInt(input.getAttribute('maxlength') || '0', 10);
+        let value = input.value.replace(/\D/g, '');
+        if (maxLength > 0) value = value.slice(0, maxLength);
+        if (input.value !== value) input.value = value;
       });
     });
   };
@@ -293,6 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initCustomSelects(currentMain);
     initBulkStudentAssignments(currentMain);
     initEditorModals(currentMain);
+    initDigitsOnlyInputs(currentMain);
     requestAnimationFrame(() => window.scrollTo(0, scrollPosition));
   };
 
@@ -372,6 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initCustomSelects();
   initBulkStudentAssignments();
   initEditorModals();
+  initDigitsOnlyInputs();
 
   document.querySelectorAll('.stat-card, .card-panel').forEach((element, index) => {
     element.style.opacity = '0';

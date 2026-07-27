@@ -10,6 +10,8 @@ function activity_action_label(string $action): string
     return [
         'login' => 'Đăng nhập',
         'change_password' => 'Đổi mật khẩu',
+        'request_password_reset' => 'Yêu cầu đặt lại mật khẩu',
+        'reset_password_self_service' => 'Tự đặt lại mật khẩu',
         'create_user' => 'Tạo tài khoản',
         'toggle_user_lock' => 'Khóa / mở tài khoản',
         'reset_password' => 'Reset mật khẩu',
@@ -18,6 +20,8 @@ function activity_action_label(string $action): string
         'update_class' => 'Cập nhật lớp học phần',
         'delete_class' => 'Xóa lớp học phần',
         'add_class_students' => 'Gán sinh viên vào lớp',
+        'remove_class_student' => 'Bỏ sinh viên khỏi lớp',
+        'transfer_class_student' => 'Chuyển sinh viên giữa các lớp',
         'create_registration_period' => 'Tạo đợt đăng ký',
         'update_registration_period' => 'Cập nhật đợt đăng ký',
         'set_period_status' => 'Đổi trạng thái đợt',
