@@ -1,5 +1,3 @@
-Options -MultiViews
-
 RewriteEngine On
 
 # Chuyển URL gõ trực tiếp có .php sang URL sạch trong lúc phát triển.
