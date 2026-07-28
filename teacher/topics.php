@@ -7,6 +7,21 @@ require_role('teacher');
 
 $user = current_user();
 
+function teacher_topic_assignments_list_path(array $overrides = []): string
+{
+    $allowed = ['q', 'class_id', 'period_id', 'status', 'per_page', 'page', 'create_topic', 'assign_topic'];
+    $query = [];
+
+    foreach ($allowed as $key) {
+        $value = array_key_exists($key, $overrides) ? $overrides[$key] : ($_GET[$key] ?? null);
+        if ($value !== null && $value !== '') {
+            $query[$key] = (string) $value;
+        }
+    }
+
+    return 'teacher/topics.php' . ($query ? '?' . http_build_query($query) : '');
+}
+
 if (is_post()) {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
@@ -107,7 +122,7 @@ if (is_post()) {
         flash('danger', $exception->getMessage());
     }
 
-    redirect('teacher/topics.php');
+    redirect(teacher_topic_assignments_list_path(['create_topic' => null, 'assign_topic' => null]));
 }
 
 $topicsStmt = db()->prepare('SELECT * FROM topics WHERE teacher_id = ? ORDER BY created_at DESC, code');
@@ -127,6 +142,81 @@ $contextsStmt = db()->prepare(
 $contextsStmt->execute([(int) $user['id']]);
 $contexts = $contextsStmt->fetchAll();
 
+$teacherClassOptions = [];
+$teacherPeriodOptions = [];
+foreach ($contexts as $context) {
+    $teacherClassOptions[(int) $context['class_id']] = [
+        'id' => (int) $context['class_id'],
+        'name' => $context['class_name'],
+        'course_code' => $context['course_code'],
+    ];
+    $teacherPeriodOptions[(int) $context['period_id']] = [
+        'id' => (int) $context['period_id'],
+        'name' => $context['period_name'],
+    ];
+}
+
+$assignmentSearch = trim((string) ($_GET['q'] ?? ''));
+$selectedClassId = max(0, (int) ($_GET['class_id'] ?? 0));
+$selectedPeriodId = max(0, (int) ($_GET['period_id'] ?? 0));
+$selectedAssignmentStatus = (string) ($_GET['status'] ?? '');
+$assignmentStatuses = ['open', 'closed', 'full'];
+if (!in_array($selectedAssignmentStatus, $assignmentStatuses, true)) {
+    $selectedAssignmentStatus = '';
+}
+if ($selectedClassId > 0 && !isset($teacherClassOptions[$selectedClassId])) {
+    $selectedClassId = 0;
+}
+if ($selectedPeriodId > 0 && !isset($teacherPeriodOptions[$selectedPeriodId])) {
+    $selectedPeriodId = 0;
+}
+
+$perPage = (int) ($_GET['per_page'] ?? 10);
+if (!in_array($perPage, [10, 20], true)) {
+    $perPage = 10;
+}
+$page = max(1, (int) ($_GET['page'] ?? 1));
+$assignmentFilterConditions = [];
+$assignmentParams = [(int) $user['id']];
+
+if ($assignmentSearch !== '') {
+    $keyword = '%' . $assignmentSearch . '%';
+    $assignmentFilterConditions[] = '(t.code LIKE ? OR t.title LIKE ?)';
+    array_push($assignmentParams, $keyword, $keyword);
+}
+if ($selectedClassId > 0) {
+    $assignmentFilterConditions[] = 'tc.class_id = ?';
+    $assignmentParams[] = $selectedClassId;
+}
+if ($selectedPeriodId > 0) {
+    $assignmentFilterConditions[] = 'tc.registration_period_id = ?';
+    $assignmentParams[] = $selectedPeriodId;
+}
+if ($selectedAssignmentStatus === 'full') {
+    $assignmentFilterConditions[] = "(
+        SELECT COUNT(*) FROM topic_registrations r_filter
+        WHERE r_filter.topic_class_id = tc.id AND r_filter.status IN ('pending', 'approved')
+    ) >= tc.max_groups";
+} elseif ($selectedAssignmentStatus !== '') {
+    $assignmentFilterConditions[] = 'tc.status = ?';
+    $assignmentParams[] = $selectedAssignmentStatus;
+}
+
+$assignmentFilterSql = $assignmentFilterConditions ? ' AND ' . implode(' AND ', $assignmentFilterConditions) : '';
+$assignmentCountStmt = db()->prepare(
+    'SELECT COUNT(*)
+     FROM topic_classes tc
+     JOIN topics t ON t.id = tc.topic_id
+     WHERE t.teacher_id = ?' . $assignmentFilterSql
+);
+$assignmentCountStmt->execute($assignmentParams);
+$totalAssignments = (int) $assignmentCountStmt->fetchColumn();
+$totalAssignmentPages = max(1, (int) ceil($totalAssignments / $perPage));
+$page = min($page, $totalAssignmentPages);
+$offset = ($page - 1) * $perPage;
+$visibleStart = $totalAssignments === 0 ? 0 : $offset + 1;
+$visibleEnd = min($offset + $perPage, $totalAssignments);
+
 $assignmentsStmt = db()->prepare(
     "SELECT tc.*, t.code, t.title, t.description, t.min_members, t.max_members,
             c.name AS class_name, co.code AS course_code, p.name AS period_name,
@@ -137,13 +227,16 @@ $assignmentsStmt = db()->prepare(
      JOIN classes c ON c.id = tc.class_id
      JOIN courses co ON co.id = c.course_id
      JOIN registration_periods p ON p.id = tc.registration_period_id
-     WHERE t.teacher_id = ?
-     ORDER BY tc.assigned_at DESC, t.code"
+     WHERE t.teacher_id = ?" . $assignmentFilterSql . "
+     ORDER BY tc.assigned_at DESC, t.code
+     LIMIT {$perPage} OFFSET {$offset}"
 );
-$assignmentsStmt->execute([(int) $user['id']]);
+$assignmentsStmt->execute($assignmentParams);
 $assignments = $assignmentsStmt->fetchAll();
 
 $page_title = 'Quản lý đề tài';
+$openTopicCreate = (int) ($_GET['create_topic'] ?? 0) === 1;
+$openTopicAssignment = (int) ($_GET['assign_topic'] ?? 0) === 1;
 require_once __DIR__ . '/../includes/header.php';
 ?>
 <section class="section-heading">
@@ -151,48 +244,61 @@ require_once __DIR__ . '/../includes/header.php';
         <h1>Quản lý đề tài</h1>
         <p>Tạo đề tài gốc, sau đó mở đề tài cho từng lớp và từng đợt đăng ký.</p>
     </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-primary" href="<?= e(url(teacher_topic_assignments_list_path(['create_topic' => 1]))) ?>">Tạo đề tài</a>
+        <a class="btn btn-primary" href="<?= e(url(teacher_topic_assignments_list_path(['assign_topic' => 1]))) ?>">Mở cho lớp</a>
+    </div>
 </section>
 
-<section class="card-panel mb-4">
+<dialog class="app-modal teacher-topic-editor-modal" data-editor-modal <?= $openTopicCreate ? 'data-open-on-load="1"' : '' ?>>
+<section class="teacher-topic-editor-modal-panel">
     <div class="panel-body">
-        <h2 class="h4 fw-bold mb-3">Tạo đề tài gốc</h2>
-        <form class="row g-3" method="post">
+        <div class="app-modal-header">
+            <h2 class="h4 fw-bold mb-0">Tạo đề tài gốc</h2>
+            <a class="app-modal-close" href="<?= e(url(teacher_topic_assignments_list_path(['create_topic' => null]))) ?>" aria-label="Đóng">&times;</a>
+        </div>
+        <form class="row g-3" method="post" data-async-form>
             <?= csrf_field() ?>
             <input type="hidden" name="action" value="create_topic">
-            <div class="col-md-2">
+            <div class="col-md-3">
                 <label class="form-label">Mã đề tài</label>
                 <input class="form-control" name="code" placeholder="DT05" required>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-9">
                 <label class="form-label">Tên đề tài</label>
                 <input class="form-control" name="title" required>
             </div>
-            <div class="col-md-1">
+            <div class="col-md-3">
                 <label class="form-label">Tối thiểu</label>
                 <input class="form-control" name="min_members" type="number" min="1" value="2">
             </div>
-            <div class="col-md-1">
+            <div class="col-md-3">
                 <label class="form-label">Tối đa</label>
                 <input class="form-control" name="max_members" type="number" min="1" value="4">
             </div>
-            <div class="col-md-4">
+            <div class="col-md-6">
                 <label class="form-label">Mô tả</label>
                 <textarea class="form-control" name="description" rows="2" required></textarea>
             </div>
-            <div class="col-md-2 d-flex align-items-end">
+            <div class="col-12 d-flex justify-content-end">
                 <button class="btn btn-primary w-100" type="submit">Tạo đề tài</button>
             </div>
         </form>
     </div>
 </section>
+</dialog>
 
-<section class="card-panel mb-4">
+<dialog class="app-modal teacher-topic-assignment-modal" data-editor-modal <?= $openTopicAssignment ? 'data-open-on-load="1"' : '' ?>>
+<section class="teacher-topic-editor-modal-panel">
     <div class="panel-body">
-        <h2 class="h4 fw-bold mb-3">Mở đề tài cho lớp</h2>
-        <form class="row g-3" method="post">
+        <div class="app-modal-header">
+            <h2 class="h4 fw-bold mb-0">Mở đề tài cho lớp</h2>
+            <a class="app-modal-close" href="<?= e(url(teacher_topic_assignments_list_path(['assign_topic' => null]))) ?>" aria-label="Đóng">&times;</a>
+        </div>
+        <form class="row g-3" method="post" data-async-form>
             <?= csrf_field() ?>
             <input type="hidden" name="action" value="assign_topic">
-            <div class="col-md-4">
+            <div class="col-md-6">
                 <label class="form-label">Đề tài gốc</label>
                 <select class="form-select" name="topic_id" required>
                     <?php foreach ($topics as $topic): ?>
@@ -200,7 +306,7 @@ require_once __DIR__ . '/../includes/header.php';
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-6">
                 <label class="form-label">Lớp và đợt đăng ký</label>
                 <select class="form-select" name="context" required onchange="const [c,p]=this.value.split('|'); this.form.class_id.value=c; this.form.registration_period_id.value=p;">
                     <?php foreach ($contexts as $context): ?>
@@ -212,18 +318,18 @@ require_once __DIR__ . '/../includes/header.php';
                 <input type="hidden" name="class_id" value="<?= e((string) ($contexts[0]['class_id'] ?? '')) ?>">
                 <input type="hidden" name="registration_period_id" value="<?= e((string) ($contexts[0]['period_id'] ?? '')) ?>">
             </div>
-            <div class="col-md-2">
+            <div class="col-md-4">
                 <label class="form-label">Số nhóm tối đa</label>
                 <input class="form-control" name="max_groups" type="number" min="1" value="1">
             </div>
-            <div class="col-md-2">
+            <div class="col-md-4">
                 <label class="form-label">Trạng thái</label>
                 <select class="form-select" name="status">
                     <option value="open">Đang mở</option>
                     <option value="closed">Đã đóng</option>
                 </select>
             </div>
-            <div class="col-md-2 d-flex align-items-end">
+            <div class="col-md-4 d-flex align-items-end">
                 <button class="btn btn-primary w-100" type="submit" <?= (!$topics || !$contexts) ? 'disabled' : '' ?>>Mở đề tài</button>
             </div>
         </form>
@@ -232,10 +338,61 @@ require_once __DIR__ . '/../includes/header.php';
         <?php endif; ?>
     </div>
 </section>
+</dialog>
+
+<section class="card-panel teacher-topics-filter-card">
+    <div class="panel-body">
+        <form class="teacher-topics-filter-form" method="get" data-auto-filter-form>
+            <div>
+                <label class="form-label" for="teacher-topic-search">Tìm đề tài</label>
+                <input class="form-control" id="teacher-topic-search" name="q" value="<?= e($assignmentSearch) ?>" placeholder="Mã hoặc tên đề tài">
+            </div>
+            <div>
+                <label class="form-label" for="teacher-topic-class">Lớp học phần</label>
+                <select class="form-select" id="teacher-topic-class" name="class_id">
+                    <option value="">Tất cả lớp</option>
+                    <?php foreach ($teacherClassOptions as $classOption): ?>
+                        <option value="<?= e((string) $classOption['id']) ?>" <?= $selectedClassId === $classOption['id'] ? 'selected' : '' ?>>
+                            <?= e($classOption['course_code'] . ' - ' . $classOption['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-topic-period">Đợt đăng ký</label>
+                <select class="form-select" id="teacher-topic-period" name="period_id">
+                    <option value="">Tất cả đợt</option>
+                    <?php foreach ($teacherPeriodOptions as $periodOption): ?>
+                        <option value="<?= e((string) $periodOption['id']) ?>" <?= $selectedPeriodId === $periodOption['id'] ? 'selected' : '' ?>><?= e($periodOption['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-topic-status">Trạng thái</label>
+                <select class="form-select" id="teacher-topic-status" name="status">
+                    <option value="">Tất cả trạng thái</option>
+                    <option value="open" <?= $selectedAssignmentStatus === 'open' ? 'selected' : '' ?>>Đang mở</option>
+                    <option value="closed" <?= $selectedAssignmentStatus === 'closed' ? 'selected' : '' ?>>Đã đóng</option>
+                    <option value="full" <?= $selectedAssignmentStatus === 'full' ? 'selected' : '' ?>>Đã đủ nhóm</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-topic-per-page">Hiển thị</label>
+                <select class="form-select" id="teacher-topic-per-page" name="per_page">
+                    <option value="10" <?= $perPage === 10 ? 'selected' : '' ?>>10 / trang</option>
+                    <option value="20" <?= $perPage === 20 ? 'selected' : '' ?>>20 / trang</option>
+                </select>
+            </div>
+        </form>
+    </div>
+</section>
 
 <section class="card-panel mb-4">
     <div class="panel-body table-responsive">
-        <h2 class="h4 fw-bold mb-3">Đề tài đã mở cho lớp</h2>
+        <div class="teacher-topics-toolbar">
+            <h2 class="h4 fw-bold mb-0">Đề tài đã mở cho lớp</h2>
+            <span><?= e((string) $visibleStart) ?>-<?= e((string) $visibleEnd) ?> / <?= e((string) $totalAssignments) ?> đề tài</span>
+        </div>
         <table class="table-clean role-mobile-table teacher-assignment-mobile-table">
             <thead>
                 <tr>
@@ -286,6 +443,24 @@ require_once __DIR__ . '/../includes/header.php';
                 <?php endif; ?>
             </tbody>
         </table>
+        <?php if ($totalAssignmentPages > 1): ?>
+            <nav class="teacher-topics-pagination" aria-label="Phân trang danh sách đề tài">
+                <span>Trang <?= e((string) $page) ?> / <?= e((string) $totalAssignmentPages) ?></span>
+                <div class="teacher-topics-pagination-links">
+                    <?php if ($page > 1): ?>
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(url(teacher_topic_assignments_list_path(['page' => $page - 1]))) ?>">Trước</a>
+                    <?php endif; ?>
+                    <?php for ($pageNumber = 1; $pageNumber <= $totalAssignmentPages; $pageNumber++): ?>
+                        <a class="btn btn-sm <?= $pageNumber === $page ? 'btn-primary' : 'btn-outline-secondary' ?>" href="<?= e(url(teacher_topic_assignments_list_path(['page' => $pageNumber]))) ?>">
+                            <?= e((string) $pageNumber) ?>
+                        </a>
+                    <?php endfor; ?>
+                    <?php if ($page < $totalAssignmentPages): ?>
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(url(teacher_topic_assignments_list_path(['page' => $page + 1]))) ?>">Sau</a>
+                    <?php endif; ?>
+                </div>
+            </nav>
+        <?php endif; ?>
     </div>
 </section>
 

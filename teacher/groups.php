@@ -55,6 +55,21 @@ function student_in_class(int $studentId, int $classId): ?array
     return $student ?: null;
 }
 
+function teacher_groups_list_path(array $overrides = []): string
+{
+    $allowed = ['q', 'class_id', 'period_id', 'registration_status', 'per_page', 'page', 'create'];
+    $query = [];
+
+    foreach ($allowed as $key) {
+        $value = array_key_exists($key, $overrides) ? $overrides[$key] : ($_GET[$key] ?? null);
+        if ($value !== null && $value !== '') {
+            $query[$key] = (string) $value;
+        }
+    }
+
+    return 'teacher/groups.php' . ($query ? '?' . http_build_query($query) : '');
+}
+
 if (is_post()) {
     verify_csrf();
     $action = (string) ($_POST['action'] ?? '');
@@ -146,7 +161,7 @@ if (is_post()) {
         flash('danger', $exception->getMessage());
     }
 
-    redirect('teacher/groups.php');
+    redirect(teacher_groups_list_path(['create' => null]));
 }
 
 $contextsStmt = db()->prepare(
@@ -161,6 +176,21 @@ $contextsStmt = db()->prepare(
 );
 $contextsStmt->execute([(int) $user['id']]);
 $teacherContexts = $contextsStmt->fetchAll();
+
+$teacherClassOptions = [];
+$teacherPeriodOptions = [];
+foreach ($teacherContexts as $context) {
+    $teacherClassOptions[(int) $context['class_id']] = [
+        'id' => (int) $context['class_id'],
+        'name' => $context['class_name'],
+        'course_code' => $context['course_code'],
+    ];
+    $teacherPeriodOptions[(int) $context['period_id']] = [
+        'id' => (int) $context['period_id'],
+        'name' => $context['period_name'],
+        'status' => $context['period_status'],
+    ];
+}
 
 $studentsStmt = db()->prepare(
     "SELECT u.id, u.name, u.email, u.user_code, c.id AS class_id, c.name AS class_name
@@ -177,10 +207,92 @@ foreach ($students as $student) {
     $studentsByClass[(int) $student['class_id']][] = $student;
 }
 
+$memberContextStmt = db()->prepare(
+    'SELECT gm.user_id, g.class_id, g.registration_period_id
+     FROM group_members gm
+     JOIN student_groups g ON g.id = gm.group_id
+     JOIN classes c ON c.id = g.class_id
+     WHERE c.teacher_id = ?'
+);
+$memberContextStmt->execute([(int) $user['id']]);
+$studentsInGroupContext = [];
+foreach ($memberContextStmt->fetchAll() as $membership) {
+    $key = (int) $membership['user_id'] . '|' . (int) $membership['class_id'] . '|' . (int) $membership['registration_period_id'];
+    $studentsInGroupContext[$key] = true;
+}
+
+$groupSearch = trim((string) ($_GET['q'] ?? ''));
+$selectedClassId = max(0, (int) ($_GET['class_id'] ?? 0));
+$selectedPeriodId = max(0, (int) ($_GET['period_id'] ?? 0));
+$selectedRegistrationStatus = (string) ($_GET['registration_status'] ?? '');
+$registrationStatuses = ['unregistered', 'pending', 'approved', 'rejected', 'cancelled', 'revoked'];
+if (!in_array($selectedRegistrationStatus, $registrationStatuses, true)) {
+    $selectedRegistrationStatus = '';
+}
+if ($selectedClassId > 0 && !isset($teacherClassOptions[$selectedClassId])) {
+    $selectedClassId = 0;
+}
+if ($selectedPeriodId > 0 && !isset($teacherPeriodOptions[$selectedPeriodId])) {
+    $selectedPeriodId = 0;
+}
+
+$perPage = (int) ($_GET['per_page'] ?? 10);
+if (!in_array($perPage, [10, 20], true)) {
+    $perPage = 10;
+}
+$page = max(1, (int) ($_GET['page'] ?? 1));
+$groupFilterConditions = [];
+$groupParams = [(int) $user['id']];
+
+if ($groupSearch !== '') {
+    $keyword = '%' . $groupSearch . '%';
+    $groupFilterConditions[] = "(g.name LIKE ? OR g.join_code LIKE ? OR EXISTS (
+        SELECT 1
+        FROM group_members gm_filter
+        JOIN users u_filter ON u_filter.id = gm_filter.user_id
+        WHERE gm_filter.group_id = g.id
+          AND (u_filter.name LIKE ? OR u_filter.email LIKE ? OR u_filter.user_code LIKE ?)
+    ))";
+    array_push($groupParams, $keyword, $keyword, $keyword, $keyword, $keyword);
+}
+if ($selectedClassId > 0) {
+    $groupFilterConditions[] = 'g.class_id = ?';
+    $groupParams[] = $selectedClassId;
+}
+if ($selectedPeriodId > 0) {
+    $groupFilterConditions[] = 'g.registration_period_id = ?';
+    $groupParams[] = $selectedPeriodId;
+}
+if ($selectedRegistrationStatus === 'unregistered') {
+    $groupFilterConditions[] = 'NOT EXISTS (SELECT 1 FROM topic_registrations r_filter WHERE r_filter.group_id = g.id)';
+} elseif ($selectedRegistrationStatus !== '') {
+    $groupFilterConditions[] = "COALESCE((
+        SELECT r_filter.status FROM topic_registrations r_filter
+        WHERE r_filter.group_id = g.id ORDER BY r_filter.id DESC LIMIT 1
+    ), '') = ?";
+    $groupParams[] = $selectedRegistrationStatus;
+}
+
+$groupFilterSql = $groupFilterConditions ? ' AND ' . implode(' AND ', $groupFilterConditions) : '';
+$groupCountStmt = db()->prepare(
+    'SELECT COUNT(*)
+     FROM student_groups g
+     JOIN classes c ON c.id = g.class_id
+     WHERE c.teacher_id = ?' . $groupFilterSql
+);
+$groupCountStmt->execute($groupParams);
+$totalGroups = (int) $groupCountStmt->fetchColumn();
+$totalPages = max(1, (int) ceil($totalGroups / $perPage));
+$page = min($page, $totalPages);
+$offset = ($page - 1) * $perPage;
+$visibleStart = $totalGroups === 0 ? 0 : $offset + 1;
+$visibleEnd = min($offset + $perPage, $totalGroups);
+
 $stmt = db()->prepare(
     "SELECT g.*, c.name AS class_name, c.min_members, c.max_members, co.code AS course_code,
             p.name AS period_name,
             creator.name AS creator_name, creator.role AS creator_role,
+            (SELECT COUNT(*) FROM group_members gm_count WHERE gm_count.group_id = g.id) AS member_count,
             (
                 SELECT GROUP_CONCAT(CONCAT(u.user_code, ' - ', u.name, IF(gm.role = 'leader', ' (Trưởng nhóm)', '')) ORDER BY gm.role DESC, u.name SEPARATOR '\n')
                 FROM group_members gm
@@ -198,13 +310,15 @@ $stmt = db()->prepare(
      )
      LEFT JOIN topic_classes tc ON tc.id = r.topic_class_id
      LEFT JOIN topics t ON t.id = tc.topic_id
-     WHERE c.teacher_id = ?
-     ORDER BY g.created_at DESC"
+     WHERE c.teacher_id = ?" . $groupFilterSql . "
+     ORDER BY g.created_at DESC
+     LIMIT {$perPage} OFFSET {$offset}"
 );
-$stmt->execute([(int) $user['id']]);
+$stmt->execute($groupParams);
 $groups = $stmt->fetchAll();
 
 $page_title = 'Danh sách nhóm';
+$openTeacherGroupEditor = (int) ($_GET['create'] ?? 0) === 1;
 require_once __DIR__ . '/../includes/header.php';
 ?>
 <section class="section-heading">
@@ -212,12 +326,17 @@ require_once __DIR__ . '/../includes/header.php';
         <h1>Danh sách nhóm</h1>
         <p>Theo dõi thành viên, số lượng và đề tài của từng nhóm trong lớp phụ trách.</p>
     </div>
+    <a class="btn btn-primary" href="<?= e(url(teacher_groups_list_path(['create' => 1]))) ?>">Tạo nhóm</a>
 </section>
 
-<section class="card-panel mb-4">
+<dialog class="app-modal teacher-group-editor-modal" data-editor-modal <?= $openTeacherGroupEditor ? 'data-open-on-load="1"' : '' ?>>
+<section class="teacher-group-editor-modal-panel">
     <div class="panel-body">
-        <h2 class="h4 fw-bold mb-3">Giảng viên tạo nhóm</h2>
-        <form class="row g-3" method="post">
+        <div class="app-modal-header">
+            <h2 class="h4 fw-bold mb-0">Giảng viên tạo nhóm</h2>
+            <a class="app-modal-close" href="<?= e(url(teacher_groups_list_path(['create' => null]))) ?>" aria-label="Đóng">&times;</a>
+        </div>
+        <form class="row g-3" method="post" data-async-form data-async-id="teacher-group-create" data-teacher-group-create>
             <?= csrf_field() ?>
             <input type="hidden" name="action" value="create_group">
             <div class="col-lg-3 col-md-6">
@@ -226,9 +345,9 @@ require_once __DIR__ . '/../includes/header.php';
             </div>
             <div class="col-lg-4 col-md-6">
                 <label class="form-label">Lớp và đợt đăng ký</label>
-                <select class="form-select" name="context" required>
+                <select class="form-select" id="teacher-group-context" name="context" data-teacher-group-context required>
                     <?php foreach ($teacherContexts as $context): ?>
-                        <option value="<?= e($context['class_id'] . '|' . $context['period_id']) ?>">
+                        <option value="<?= e($context['class_id'] . '|' . $context['period_id']) ?>" data-class-id="<?= e((string) $context['class_id']) ?>">
                             <?= e($context['course_code'] . ' - ' . $context['class_name'] . ' · ' . $context['period_name']) ?>
                         </option>
                     <?php endforeach; ?>
@@ -236,16 +355,16 @@ require_once __DIR__ . '/../includes/header.php';
             </div>
             <div class="col-lg-3 col-md-8">
                 <label class="form-label">Trưởng nhóm</label>
-                <select class="form-select" name="leader_id" required>
+                <select class="form-select" id="teacher-group-leader" name="leader_id" data-teacher-group-leader required>
                     <?php foreach ($students as $student): ?>
-                        <option value="<?= e((string) $student['id']) ?>">
+                        <option value="<?= e((string) $student['id']) ?>" data-class-id="<?= e((string) $student['class_id']) ?>">
                             <?= e($student['class_name'] . ' · ' . $student['user_code'] . ' - ' . $student['name']) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="col-lg-2 col-md-4 d-flex align-items-end">
-                <button class="btn btn-primary w-100" type="submit" <?= (!$teacherContexts || !$students) ? 'disabled' : '' ?>>Tạo nhóm</button>
+                <button class="btn btn-primary w-100" type="submit" data-teacher-group-submit <?= (!$teacherContexts || !$students) ? 'disabled' : '' ?>>Tạo nhóm</button>
             </div>
         </form>
         <?php if (!$teacherContexts): ?>
@@ -257,9 +376,64 @@ require_once __DIR__ . '/../includes/header.php';
         <?php endif; ?>
     </div>
 </section>
+</dialog>
+
+<section class="card-panel teacher-groups-filter-card">
+    <div class="panel-body">
+        <form class="teacher-groups-filter-form" method="get" data-auto-filter-form>
+            <div>
+                <label class="form-label" for="teacher-group-search">Tìm nhóm</label>
+                <input class="form-control" id="teacher-group-search" name="q" value="<?= e($groupSearch) ?>" placeholder="Tên nhóm, mã tham gia, sinh viên">
+            </div>
+            <div>
+                <label class="form-label" for="teacher-group-class">Lớp học phần</label>
+                <select class="form-select" id="teacher-group-class" name="class_id">
+                    <option value="">Tất cả lớp</option>
+                    <?php foreach ($teacherClassOptions as $classOption): ?>
+                        <option value="<?= e((string) $classOption['id']) ?>" <?= $selectedClassId === $classOption['id'] ? 'selected' : '' ?>>
+                            <?= e($classOption['course_code'] . ' - ' . $classOption['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-group-period">Đợt đăng ký</label>
+                <select class="form-select" id="teacher-group-period" name="period_id">
+                    <option value="">Tất cả đợt</option>
+                    <?php foreach ($teacherPeriodOptions as $periodOption): ?>
+                        <option value="<?= e((string) $periodOption['id']) ?>" <?= $selectedPeriodId === $periodOption['id'] ? 'selected' : '' ?>>
+                            <?= e($periodOption['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-group-status">Trạng thái đăng ký</label>
+                <select class="form-select" id="teacher-group-status" name="registration_status">
+                    <option value="">Tất cả trạng thái</option>
+                    <option value="unregistered" <?= $selectedRegistrationStatus === 'unregistered' ? 'selected' : '' ?>>Chưa đăng ký</option>
+                    <?php foreach (array_slice($registrationStatuses, 1) as $status): ?>
+                        <option value="<?= e($status) ?>" <?= $selectedRegistrationStatus === $status ? 'selected' : '' ?>><?= e(status_label($status)) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-group-per-page">Hiển thị</label>
+                <select class="form-select" id="teacher-group-per-page" name="per_page">
+                    <option value="10" <?= $perPage === 10 ? 'selected' : '' ?>>10 / trang</option>
+                    <option value="20" <?= $perPage === 20 ? 'selected' : '' ?>>20 / trang</option>
+                </select>
+            </div>
+        </form>
+    </div>
+</section>
 
 <section class="card-panel">
     <div class="panel-body table-responsive">
+        <div class="teacher-groups-toolbar">
+            <strong>Danh sách nhóm</strong>
+            <span><?= e((string) $visibleStart) ?>-<?= e((string) $visibleEnd) ?> / <?= e((string) $totalGroups) ?> nhóm</span>
+        </div>
         <table class="table-clean role-mobile-table teacher-groups-mobile-table">
             <thead>
                 <tr>
@@ -274,10 +448,18 @@ require_once __DIR__ . '/../includes/header.php';
             <tbody>
                 <?php foreach ($groups as $group): ?>
                     <?php
+                    $availableStudents = array_values(array_filter(
+                        $studentsByClass[(int) $group['class_id']] ?? [],
+                        static function (array $student) use ($group, $studentsInGroupContext): bool {
+                            $key = (int) $student['id'] . '|' . (int) $group['class_id'] . '|' . (int) $group['registration_period_id'];
+
+                            return !isset($studentsInGroupContext[$key]);
+                        }
+                    ));
                     $canAddMember = $group['status'] !== 'locked'
                         && !in_array((string) ($group['registration_status'] ?? ''), ['pending', 'approved'], true)
-                        && group_member_count((int) $group['id']) < (int) $group['max_members']
-                        && !empty($studentsByClass[(int) $group['class_id']]);
+                        && (int) $group['member_count'] < (int) $group['max_members']
+                        && !empty($availableStudents);
                     ?>
                     <tr>
                         <td>
@@ -288,7 +470,7 @@ require_once __DIR__ . '/../includes/header.php';
                         <td><?= e($group['course_code'] . ' - ' . $group['class_name']) ?><br><span class="text-muted"><?= e($group['period_name']) ?></span></td>
                         <td>
                             <div style="white-space: pre-line"><?= e($group['members'] ?: 'Chưa có thành viên') ?></div>
-                            <small class="text-muted"><?= e((string) group_member_count((int) $group['id'])) ?>/<?= e((string) $group['max_members']) ?> thành viên</small>
+                            <small class="text-muted"><?= e((string) $group['member_count']) ?>/<?= e((string) $group['max_members']) ?> thành viên</small>
                         </td>
                         <td><?= e($group['topic_title'] ?: 'Chưa đăng ký') ?></td>
                         <td>
@@ -300,12 +482,12 @@ require_once __DIR__ . '/../includes/header.php';
                         </td>
                         <td>
                             <?php if ($canAddMember): ?>
-                                <form class="d-grid gap-2" method="post">
+                                <form class="d-grid gap-2" method="post" data-async-form>
                                     <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="add_member">
                                     <input type="hidden" name="group_id" value="<?= e((string) $group['id']) ?>">
                                     <select class="form-select form-select-sm" name="student_id" required>
-                                        <?php foreach ($studentsByClass[(int) $group['class_id']] ?? [] as $student): ?>
+                                        <?php foreach ($availableStudents as $student): ?>
                                             <option value="<?= e((string) $student['id']) ?>">
                                                 <?= e($student['user_code'] . ' - ' . $student['name']) ?>
                                             </option>
@@ -324,6 +506,24 @@ require_once __DIR__ . '/../includes/header.php';
                 <?php endif; ?>
             </tbody>
         </table>
+        <?php if ($totalPages > 1): ?>
+            <nav class="teacher-groups-pagination" aria-label="Phân trang danh sách nhóm">
+                <span>Trang <?= e((string) $page) ?> / <?= e((string) $totalPages) ?></span>
+                <div class="teacher-groups-pagination-links">
+                    <?php if ($page > 1): ?>
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(url(teacher_groups_list_path(['page' => $page - 1]))) ?>">Trước</a>
+                    <?php endif; ?>
+                    <?php for ($pageNumber = 1; $pageNumber <= $totalPages; $pageNumber++): ?>
+                        <a class="btn btn-sm <?= $pageNumber === $page ? 'btn-primary' : 'btn-outline-secondary' ?>" href="<?= e(url(teacher_groups_list_path(['page' => $pageNumber]))) ?>">
+                            <?= e((string) $pageNumber) ?>
+                        </a>
+                    <?php endfor; ?>
+                    <?php if ($page < $totalPages): ?>
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(url(teacher_groups_list_path(['page' => $page + 1]))) ?>">Sau</a>
+                    <?php endif; ?>
+                </div>
+            </nav>
+        <?php endif; ?>
     </div>
 </section>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>

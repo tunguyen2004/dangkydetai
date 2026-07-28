@@ -90,8 +90,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const syncSelection = () => {
         const selectedOption = select.options[select.selectedIndex];
         triggerText.textContent = selectedOption?.textContent.trim() || 'Chọn giá trị';
-        optionButtons.forEach((button) => {
+        optionButtons.forEach((button, index) => {
+          const option = select.options[index];
           const selected = button.dataset.value === select.value;
+          button.disabled = Boolean(option?.disabled);
+          button.hidden = Boolean(option?.hidden);
           button.classList.toggle('is-selected', selected);
           button.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
@@ -161,6 +164,64 @@ document.addEventListener('DOMContentLoaded', () => {
 
       select.addEventListener('change', syncSelection);
       syncSelection();
+    });
+  };
+
+  const initTeacherGroupCreate = (root = document) => {
+    root.querySelectorAll('[data-teacher-group-create]').forEach((form) => {
+      if (form.dataset.teacherGroupReady === '1') return;
+      form.dataset.teacherGroupReady = '1';
+
+      const contextSelect = form.querySelector('[data-teacher-group-context]');
+      const leaderSelect = form.querySelector('[data-teacher-group-leader]');
+      const submitButton = form.querySelector('[data-teacher-group-submit]');
+      if (!contextSelect || !leaderSelect) return;
+
+      const refreshLeaders = () => {
+        const selectedContext = contextSelect.options[contextSelect.selectedIndex];
+        const classId = selectedContext?.dataset.classId || '';
+        let firstAvailable = '';
+
+        [...leaderSelect.options].forEach((option) => {
+          const isAvailable = option.value !== '' && option.dataset.classId === classId;
+          option.hidden = !isAvailable;
+          option.disabled = !isAvailable;
+          if (isAvailable && firstAvailable === '') firstAvailable = option.value;
+        });
+
+        if (leaderSelect.options[leaderSelect.selectedIndex]?.disabled) {
+          leaderSelect.value = firstAvailable;
+        }
+        if (submitButton) submitButton.disabled = firstAvailable === '';
+        leaderSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+
+      contextSelect.addEventListener('change', refreshLeaders);
+      refreshLeaders();
+    });
+  };
+
+  const initAutoFilterForms = (root = document) => {
+    root.querySelectorAll('[data-auto-filter-form]').forEach((form) => {
+      if (form.dataset.autoFilterReady === '1') return;
+      form.dataset.autoFilterReady = '1';
+
+      let searchTimer;
+      const submitFilter = () => {
+        if (form.dataset.autoSubmitting === '1') return;
+        form.dataset.autoSubmitting = '1';
+        form.requestSubmit();
+      };
+
+      form.querySelectorAll('select').forEach((select) => {
+        select.addEventListener('change', submitFilter);
+      });
+      form.querySelectorAll('input[type="search"], input[type="text"]').forEach((input) => {
+        input.addEventListener('input', () => {
+          clearTimeout(searchTimer);
+          searchTimer = setTimeout(submitFilter, 500);
+        });
+      });
     });
   };
 
@@ -306,6 +367,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initFlashMessages(currentMain);
     initCustomSelects(currentMain);
+    initTeacherGroupCreate(currentMain);
+    initAutoFilterForms(currentMain);
     initBulkStudentAssignments(currentMain);
     initEditorModals(currentMain);
     initDigitsOnlyInputs(currentMain);
@@ -386,6 +449,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   initFlashMessages();
   initCustomSelects();
+  initTeacherGroupCreate();
+  initAutoFilterForms();
   initBulkStudentAssignments();
   initEditorModals();
   initDigitsOnlyInputs();

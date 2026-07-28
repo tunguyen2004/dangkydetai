@@ -7,6 +7,21 @@ require_role('teacher');
 
 $user = current_user();
 
+function teacher_registrations_list_path(array $overrides = []): string
+{
+    $allowed = ['status', 'q', 'class_id', 'period_id'];
+    $query = [];
+
+    foreach ($allowed as $key) {
+        $value = array_key_exists($key, $overrides) ? $overrides[$key] : ($_GET[$key] ?? null);
+        if ($value !== null && $value !== '') {
+            $query[$key] = (string) $value;
+        }
+    }
+
+    return 'teacher/registrations.php' . ($query ? '?' . http_build_query($query) : '');
+}
+
 if (is_post()) {
     verify_csrf();
 
@@ -107,7 +122,7 @@ if (is_post()) {
         flash('danger', $exception->getMessage());
     }
 
-    redirect('teacher/registrations.php');
+    redirect(teacher_registrations_list_path());
 }
 
 $statusFilter = (string) ($_GET['status'] ?? 'pending');
@@ -116,12 +131,68 @@ if (!in_array($statusFilter, $allowedFilters, true)) {
     $statusFilter = 'pending';
 }
 
-$where = 'WHERE c.teacher_id = ?';
+$contextsStmt = db()->prepare(
+    'SELECT c.id AS class_id, c.name AS class_name, co.code AS course_code,
+            p.id AS period_id, p.name AS period_name
+     FROM classes c
+     JOIN courses co ON co.id = c.course_id
+     JOIN registration_period_classes rpc ON rpc.class_id = c.id
+     JOIN registration_periods p ON p.id = rpc.registration_period_id
+     WHERE c.teacher_id = ?
+     ORDER BY c.name, p.created_at DESC'
+);
+$contextsStmt->execute([(int) $user['id']]);
+$contexts = $contextsStmt->fetchAll();
+$teacherClassOptions = [];
+$teacherPeriodOptions = [];
+foreach ($contexts as $context) {
+    $teacherClassOptions[(int) $context['class_id']] = [
+        'id' => (int) $context['class_id'],
+        'name' => $context['class_name'],
+        'course_code' => $context['course_code'],
+    ];
+    $teacherPeriodOptions[(int) $context['period_id']] = [
+        'id' => (int) $context['period_id'],
+        'name' => $context['period_name'],
+    ];
+}
+
+$registrationSearch = trim((string) ($_GET['q'] ?? ''));
+$selectedClassId = max(0, (int) ($_GET['class_id'] ?? 0));
+$selectedPeriodId = max(0, (int) ($_GET['period_id'] ?? 0));
+if ($selectedClassId > 0 && !isset($teacherClassOptions[$selectedClassId])) {
+    $selectedClassId = 0;
+}
+if ($selectedPeriodId > 0 && !isset($teacherPeriodOptions[$selectedPeriodId])) {
+    $selectedPeriodId = 0;
+}
+
+$conditions = ['c.teacher_id = ?'];
 $params = [(int) $user['id']];
 if ($statusFilter !== 'all') {
-    $where .= ' AND r.status = ?';
+    $conditions[] = 'r.status = ?';
     $params[] = $statusFilter;
 }
+if ($registrationSearch !== '') {
+    $keyword = '%' . $registrationSearch . '%';
+    $conditions[] = "(g.name LIKE ? OR t.code LIKE ? OR t.title LIKE ? OR c.name LIKE ? OR co.code LIKE ? OR EXISTS (
+        SELECT 1
+        FROM group_members gm_filter
+        JOIN users u_filter ON u_filter.id = gm_filter.user_id
+        WHERE gm_filter.group_id = g.id
+          AND (u_filter.user_code LIKE ? OR u_filter.name LIKE ? OR u_filter.email LIKE ?)
+    ))";
+    array_push($params, $keyword, $keyword, $keyword, $keyword, $keyword, $keyword, $keyword, $keyword);
+}
+if ($selectedClassId > 0) {
+    $conditions[] = 'c.id = ?';
+    $params[] = $selectedClassId;
+}
+if ($selectedPeriodId > 0) {
+    $conditions[] = 'p.id = ?';
+    $params[] = $selectedPeriodId;
+}
+$where = 'WHERE ' . implode(' AND ', $conditions);
 
 $stmt = db()->prepare(
     "SELECT r.*, g.name AS group_name, c.name AS class_name, co.code AS course_code,
@@ -153,10 +224,42 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
     <div class="d-flex gap-2 flex-wrap">
         <?php foreach ($allowedFilters as $filter): ?>
-            <a class="btn btn-sm <?= $statusFilter === $filter ? 'btn-primary' : 'btn-outline-primary' ?>" href="?status=<?= e($filter) ?>">
+            <a class="btn btn-sm <?= $statusFilter === $filter ? 'btn-primary' : 'btn-outline-primary' ?>" href="<?= e(url(teacher_registrations_list_path(['status' => $filter]))) ?>">
                 <?= e($filter === 'all' ? 'Tất cả' : status_label($filter)) ?>
             </a>
         <?php endforeach; ?>
+    </div>
+</section>
+
+<section class="card-panel teacher-registrations-filter-card">
+    <div class="panel-body">
+        <form class="teacher-registrations-filter-form" method="get" data-auto-filter-form>
+            <input type="hidden" name="status" value="<?= e($statusFilter) ?>">
+            <div>
+                <label class="form-label" for="teacher-registration-search">Tìm đăng ký</label>
+                <input class="form-control" id="teacher-registration-search" name="q" value="<?= e($registrationSearch) ?>" placeholder="Nhóm, đề tài, lớp hoặc mã sinh viên">
+            </div>
+            <div>
+                <label class="form-label" for="teacher-registration-class">Lớp học phần</label>
+                <select class="form-select" id="teacher-registration-class" name="class_id">
+                    <option value="">Tất cả lớp</option>
+                    <?php foreach ($teacherClassOptions as $classOption): ?>
+                        <option value="<?= e((string) $classOption['id']) ?>" <?= $selectedClassId === $classOption['id'] ? 'selected' : '' ?>>
+                            <?= e($classOption['course_code'] . ' - ' . $classOption['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="teacher-registration-period">Đợt đăng ký</label>
+                <select class="form-select" id="teacher-registration-period" name="period_id">
+                    <option value="">Tất cả đợt</option>
+                    <?php foreach ($teacherPeriodOptions as $periodOption): ?>
+                        <option value="<?= e((string) $periodOption['id']) ?>" <?= $selectedPeriodId === $periodOption['id'] ? 'selected' : '' ?>><?= e($periodOption['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </form>
     </div>
 </section>
 
@@ -178,7 +281,7 @@ require_once __DIR__ . '/../includes/header.php';
                             <p class="mt-3 mb-0 text-muted"><strong>Phản hồi:</strong> <?= e($registration['teacher_feedback']) ?></p>
                         <?php endif; ?>
                     </div>
-                    <form class="review-form" method="post">
+                    <form class="review-form" method="post" data-async-form>
                         <?= csrf_field() ?>
                         <input type="hidden" name="registration_id" value="<?= e((string) $registration['id']) ?>">
                         <label class="form-label">Phản hồi giảng viên</label>

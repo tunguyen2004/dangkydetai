@@ -203,6 +203,63 @@ if (is_post()) {
                 flash('success', 'Bạn đã rời nhóm.');
             }
         }
+
+        if ($action === 'transfer_leadership') {
+            $groupId = (int) ($_POST['group_id'] ?? 0);
+            $newLeaderId = (int) ($_POST['new_leader_id'] ?? 0);
+            $group = student_owned_group($groupId, (int) $user['id']);
+
+            if (!$group || !is_group_leader($groupId, (int) $user['id'])) {
+                throw new RuntimeException('Chỉ trưởng nhóm hiện tại mới được chuyển quyền trưởng nhóm.');
+            }
+            if ($newLeaderId <= 0 || $newLeaderId === (int) $user['id']) {
+                throw new RuntimeException('Vui lòng chọn một thành viên khác để nhận quyền trưởng nhóm.');
+            }
+            if ($group['status'] === 'locked' || group_active_registration($groupId)) {
+                throw new RuntimeException('Nhóm đã đăng ký hoặc đã khóa nên không thể chuyển quyền trưởng nhóm.');
+            }
+
+            db()->beginTransaction();
+            // Lock all members so the handover always leaves exactly one leader.
+            $membersStmt = db()->prepare('SELECT user_id, role FROM group_members WHERE group_id = ? FOR UPDATE');
+            $membersStmt->execute([$groupId]);
+            $groupMembers = $membersStmt->fetchAll();
+
+            $currentLeaderFound = false;
+            $newLeaderIsMember = false;
+            $leaderCount = 0;
+            foreach ($groupMembers as $member) {
+                if ($member['role'] === 'leader') {
+                    $leaderCount++;
+                }
+                if ((int) $member['user_id'] === (int) $user['id'] && $member['role'] === 'leader') {
+                    $currentLeaderFound = true;
+                }
+                if ((int) $member['user_id'] === $newLeaderId && $member['role'] === 'member') {
+                    $newLeaderIsMember = true;
+                }
+            }
+            if ($leaderCount !== 1) {
+                throw new RuntimeException('Dữ liệu nhóm cần có đúng một trưởng nhóm trước khi chuyển quyền.');
+            }
+            if (!$currentLeaderFound || !$newLeaderIsMember) {
+                throw new RuntimeException('Người được chọn phải là thành viên hiện tại của nhóm.');
+            }
+
+            db()->prepare(
+                "UPDATE group_members
+                 SET role = CASE
+                    WHEN user_id = ? THEN 'leader'
+                    WHEN user_id = ? THEN 'member'
+                    ELSE role
+                 END
+                 WHERE group_id = ? AND user_id IN (?, ?)"
+            )->execute([$newLeaderId, (int) $user['id'], $groupId, $newLeaderId, (int) $user['id']]);
+            db()->commit();
+
+            log_activity('transfer_group_leadership', 'Chuyển quyền trưởng nhóm #' . $groupId . ' cho sinh viên #' . $newLeaderId);
+            flash('success', 'Đã chuyển quyền trưởng nhóm thành công.');
+        }
     } catch (Throwable $exception) {
         if (db()->inTransaction()) {
             db()->rollBack();
@@ -240,7 +297,7 @@ if ($groups) {
     $ids = array_map(static fn(array $group): int => (int) $group['id'], $groups);
     $placeholders = implode(',', array_fill(0, count($ids), '?'));
     $stmt = db()->prepare(
-        "SELECT gm.group_id, u.name, u.email, u.user_code, gm.role
+        "SELECT gm.group_id, gm.user_id, u.name, u.email, u.user_code, gm.role
          FROM group_members gm
          JOIN users u ON u.id = gm.user_id
          WHERE gm.group_id IN ($placeholders)
@@ -338,6 +395,8 @@ require_once __DIR__ . '/../includes/header.php';
         $members = $membersByGroup[(int) $group['id']] ?? [];
         $registration = group_registration((int) $group['id']);
         $isLeader = is_group_leader((int) $group['id'], (int) $user['id']);
+        $hasActiveRegistration = $registration && in_array((string) $registration['status'], ['pending', 'approved'], true);
+        $canTransferLeadership = $isLeader && !$hasActiveRegistration && $group['status'] !== 'locked' && count($members) > 1;
         ?>
         <article class="card-panel">
             <div class="panel-body">
@@ -382,6 +441,7 @@ require_once __DIR__ . '/../includes/header.php';
                                 <th>Họ tên</th>
                                 <th>Email</th>
                                 <th>Vai trò</th>
+                                <th>Thao tác</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -391,6 +451,21 @@ require_once __DIR__ . '/../includes/header.php';
                                     <td><?= e($member['name']) ?></td>
                                     <td><?= e($member['email']) ?></td>
                                     <td><?= $member['role'] === 'leader' ? 'Trưởng nhóm' : 'Thành viên' ?></td>
+                                    <td>
+                                        <?php if ($canTransferLeadership && $member['role'] === 'member'): ?>
+                                            <form method="post" data-async-form onsubmit="return confirm('Chuyển quyền trưởng nhóm cho thành viên này?')">
+                                                <?= csrf_field() ?>
+                                                <input type="hidden" name="action" value="transfer_leadership">
+                                                <input type="hidden" name="group_id" value="<?= e((string) $group['id']) ?>">
+                                                <input type="hidden" name="new_leader_id" value="<?= e((string) $member['user_id']) ?>">
+                                                <button class="btn btn-sm btn-outline-primary" type="submit">Chuyển quyền</button>
+                                            </form>
+                                        <?php elseif ($member['role'] === 'leader'): ?>
+                                            <span class="text-muted">Trưởng nhóm</span>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
