@@ -92,7 +92,17 @@ function send_password_reset_email(string $email, string $name, string $resetUrl
         $mailer->Password = SMTP_PASSWORD;
         $mailer->CharSet = 'UTF-8';
         $mailer->Timeout = 15;
-        $mailer->SMTPDebug = 0;
+        $mailer->SMTPDebug = 3;
+        $mailer->Debugoutput = function ($str, $level) {
+            error_log("SMTP DEBUG [$level]: $str");
+        };
+        $mailer->SMTPOptions = [
+            'ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+            ],
+        ];
         $mailer->SMTPSecure = strtolower((string) (defined('SMTP_ENCRYPTION') ? SMTP_ENCRYPTION : 'tls')) === 'ssl'
             ? \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
             : \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
