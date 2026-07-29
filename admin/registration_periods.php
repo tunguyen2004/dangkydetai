@@ -193,11 +193,11 @@ require_once __DIR__ . '/../includes/header.php';
                     <div class="rp-select-wrap">
                         <select class="rp-select" name="status">
                             <?php if (!$editPeriod): ?>
-                                <option value="draft" selected>📝 Nháp</option>
+                                <option value="draft" selected>✏️ Nháp</option>
                             <?php else: ?>
-                                <option value="draft" <?= $editPeriod['status'] === 'draft' ? 'selected' : '' ?>>📝 Nháp</option>
-                                <option value="open" <?= $editPeriod['status'] === 'open' ? 'selected' : '' ?>>🟢 Đang mở</option>
-                                <option value="closed" <?= $editPeriod['status'] === 'closed' ? 'selected' : '' ?>>🔴 Đã đóng</option>
+                            <option value="draft" <?= $editPeriod['status'] === 'draft' ? 'selected' : '' ?>>✏️ Nháp</option>
+                            <option value="open" <?= $editPeriod['status'] === 'open' ? 'selected' : '' ?>>🔓 Đang mở</option>
+                            <option value="closed" <?= $editPeriod['status'] === 'closed' ? 'selected' : '' ?>>🔒 Đã đóng</option>
                             <?php endif; ?>
                         </select>
                         <span class="rp-select-arrow">
@@ -329,9 +329,9 @@ require_once __DIR__ . '/../includes/header.php';
                                     <input type="hidden" name="registration_period_id" value="<?= e((string) $period['id']) ?>">
                                     <div class="rp-select-wrap rp-select-sm">
                                         <select class="rp-select" name="status">
-                                            <option value="draft" <?= $period['status'] === 'draft' ? 'selected' : '' ?>>📝 Nháp</option>
-                                            <option value="open" <?= $period['status'] === 'open' ? 'selected' : '' ?>>🟢 Mở</option>
-                                            <option value="closed" <?= $period['status'] === 'closed' ? 'selected' : '' ?>>🔴 Đóng</option>
+                                        <option value="draft" <?= $period['status'] === 'draft' ? 'selected' : '' ?>>✏️ Nháp</option>
+                                        <option value="open" <?= $period['status'] === 'open' ? 'selected' : '' ?>>🔓 Mở</option>
+                                        <option value="closed" <?= $period['status'] === 'closed' ? 'selected' : '' ?>>🔒 Đóng</option>
                                         </select>
                                         <span class="rp-select-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
                                     </div>
