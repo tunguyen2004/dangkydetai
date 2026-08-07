@@ -25,14 +25,14 @@ if ($user) {
         ];
     } elseif ($user['role'] === 'teacher') {
         $manageLinks = [
-            ['path' => 'teacher/topics.php', 'label' => 'Đề tài', 'icon' => 'file-text'],
-            ['path' => 'teacher/groups.php', 'label' => 'Nhóm', 'icon' => 'users'],
-            ['path' => 'teacher/registrations.php', 'label' => 'Duyệt đăng ký', 'icon' => 'clipboard'],
+            ['path' => 'user/topics.php', 'label' => 'Đề tài', 'icon' => 'file-text'],
+            ['path' => 'user/group.php', 'label' => 'Nhóm', 'icon' => 'users'],
+            ['path' => 'user/registrations.php', 'label' => 'Duyệt đăng ký', 'icon' => 'clipboard'],
         ];
     } else {
         $manageLinks = [
-            ['path' => 'student/group.php', 'label' => 'Nhóm của bạn', 'icon' => 'users'],
-            ['path' => 'student/topics.php', 'label' => 'Đăng ký đề tài', 'icon' => 'file-text'],
+            ['path' => 'user/group.php', 'label' => 'Nhóm của bạn', 'icon' => 'users'],
+            ['path' => 'user/topics.php', 'label' => 'Đăng ký đề tài', 'icon' => 'file-text'],
         ];
     }
 }

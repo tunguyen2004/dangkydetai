@@ -233,8 +233,8 @@ function post_login_redirect_path(array $user): string
 {
     return match ($user['role']) {
         'admin' => 'admin/users.php',
-        'teacher' => 'teacher/registrations.php',
-        default => 'student/group.php',
+        'teacher' => 'user/registrations.php',
+        default => 'user/group.php',
     };
 }
 

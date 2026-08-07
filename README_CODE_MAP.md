@@ -28,19 +28,17 @@ flash thông báo -> redirect -> header/footer hiển thị giao diện
 K73_nhom10_dangky_detai/
 ├── index.php                         # Điểm vào dự án cho người chưa đăng nhập
 ├── dashboard.php                     # Dashboard theo số liệu và vai trò
+├── group.php                         # URL tương thích, chuyển vào user/group.php
 ├── admin/                            # Phân hệ Quản trị viên
 │   ├── users.php                     # Tài khoản, khóa/mở, reset mật khẩu
 │   ├── courses.php                   # Học phần
 │   ├── classes.php                   # Lớp, giảng viên, gán/bỏ sinh viên
 │   ├── registration_periods.php      # Đợt đăng ký, gán lớp, mở/đóng
 │   └── activity_logs.php              # Nhật ký thao tác
-├── teacher/                          # Phân hệ Giảng viên
-│   ├── groups.php                    # Xem/tìm/lọc nhóm, tạo nhóm hỗ trợ
-│   ├── topics.php                    # Tạo đề tài gốc, mở đề tài cho lớp/đợt
-│   └── registrations.php              # Duyệt, từ chối, hủy duyệt đăng ký
-├── student/                          # Phân hệ Sinh viên
-│   ├── group.php                     # Tạo nhóm, mời thành viên, chuyển trưởng nhóm
-│   └── topics.php                    # Xem đề tài, đăng ký và hủy đăng ký
+├── user/                             # Phân hệ dùng chung cho Giảng viên + Sinh viên
+│   ├── group.php                     # Nhóm chung; rẽ nhánh theo role
+│   ├── topics.php                    # Điểm vào chung; rẽ nhánh theo role
+│   └── registrations.php             # Duyệt đăng ký của Giảng viên
 ├── auth/                             # Xác thực tài khoản
 │   ├── login.php                     # Đăng nhập, tạo session
 │   ├── logout.php                    # Hủy session
@@ -110,11 +108,11 @@ Cách nói khi vấn đáp:
 | Lớp, gán/bỏ sinh viên | `admin/classes.php` | `classes`, `class_students` |
 | Đợt đăng ký | `admin/registration_periods.php` | `registration_periods`, `registration_period_classes` |
 | Nhật ký hoạt động | `admin/activity_logs.php` | `activity_logs` |
-| Tạo đề tài, mở cho lớp/đợt | `teacher/topics.php` | `topics`, `topic_classes` |
-| Giảng viên xem hoặc tạo nhóm hỗ trợ | `teacher/groups.php` | `student_groups`, `group_members` |
-| Duyệt/từ chối/hủy duyệt | `teacher/registrations.php` | `topic_registrations`, `topic_classes` |
-| Sinh viên lập nhóm/lời mời/chuyển trưởng nhóm | `student/group.php` | `student_groups`, `group_members`, `group_invitations` |
-| Sinh viên đăng ký đề tài | `student/topics.php` | `topic_registrations`, `topic_classes` |
+| Tạo đề tài, mở cho lớp/đợt | `user/topics.php` (Giảng viên) | `topics`, `topic_classes` |
+| Giảng viên/Sinh viên cùng vào Nhóm | `user/group.php` -> theo `role` | `student_groups`, `group_members` |
+| Duyệt/từ chối/hủy duyệt | `user/registrations.php` (Giảng viên) | `topic_registrations`, `topic_classes` |
+| Sinh viên lập nhóm/lời mời/chuyển trưởng nhóm | `user/group.php` (Sinh viên) | `student_groups`, `group_members`, `group_invitations` |
+| Sinh viên đăng ký đề tài | `user/topics.php` (Sinh viên) | `topic_registrations`, `topic_classes` |
 
 ## 6. Mẫu đọc một trang nghiệp vụ
 
@@ -138,11 +136,11 @@ Khi mở bất kỳ trang PHP nào, đọc theo thứ tự này:
 
 ### 7.2. Đăng ký đề tài
 
-`student/topics.php` kiểm tra trưởng nhóm, thời hạn, số thành viên, đề tài đúng lớp/đợt, sức chứa `max_groups` và đăng ký còn hiệu lực trước khi thêm dòng vào `topic_registrations`.
+Nhánh Sinh viên trong `user/topics.php` kiểm tra trưởng nhóm, thời hạn, số thành viên, đề tài đúng lớp/đợt, sức chứa `max_groups` và đăng ký còn hiệu lực trước khi thêm dòng vào `topic_registrations`.
 
 ### 7.3. Chuyển quyền trưởng nhóm
 
-`student/group.php` dùng transaction để đổi vai trò cũ `leader -> member` và vai trò mới `member -> leader`. Nếu lỗi thì rollback để không có hai trưởng nhóm hoặc không còn trưởng nhóm.
+Nhánh Sinh viên trong `user/group.php` dùng transaction để đổi vai trò cũ `leader -> member` và vai trò mới `member -> leader`. Nếu lỗi thì rollback để không có hai trưởng nhóm hoặc không còn trưởng nhóm.
 
 ## 8. Câu trả lời mẫu khi bị chỉ vào code
 

@@ -44,9 +44,9 @@ require_once __DIR__ . '/includes/header.php';
         <p>Theo dõi nhanh tình trạng nhóm, đề tài và đăng ký.</p>
     </div>
     <?php if ($user['role'] === 'student'): ?>
-        <a class="btn btn-primary" href="<?= e(url('student/group.php')) ?>">Vào nhóm của bạn</a>
+        <a class="btn btn-primary" href="<?= e(url('user/group.php')) ?>">Vào nhóm của bạn</a>
     <?php elseif ($user['role'] === 'teacher'): ?>
-        <a class="btn btn-primary" href="<?= e(url('teacher/registrations.php')) ?>">Duyệt đăng ký</a>
+        <a class="btn btn-primary" href="<?= e(url('user/registrations.php')) ?>">Duyệt đăng ký</a>
     <?php endif; ?>
 </section>
 

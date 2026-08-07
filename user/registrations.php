@@ -19,7 +19,7 @@ function teacher_registrations_list_path(array $overrides = []): string
         }
     }
 
-    return 'teacher/registrations.php' . ($query ? '?' . http_build_query($query) : '');
+    return 'user/registrations.php' . ($query ? '?' . http_build_query($query) : '');
 }
 
 if (is_post()) {
@@ -306,3 +306,5 @@ require_once __DIR__ . '/../includes/header.php';
     <?php endif; ?>
 </section>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+
